@@ -99,7 +99,7 @@ def space_timesteps(num_timesteps, section_counts):
     """Select the spaced timestep subset used by DDPM/DDIM evaluation."""
     if isinstance(section_counts, str):
         if section_counts.startswith("ddim"):
-            desired_count = int(section_counts[len("ddim"):])
+            desired_count = int(section_counts[len("ddim") :])
             for i in range(1, num_timesteps):
                 if len(range(0, num_timesteps, i)) == desired_count:
                     return set(range(0, num_timesteps, i))
@@ -294,7 +294,9 @@ class Downsample(nn.Module):
         return self.op(x)
 
 
-def apply_conditions(h, emb=None, cond=None, layers: nn.Sequential = None, scale_bias: float = 1, in_channels: int = 512):
+def apply_conditions(
+    h, emb=None, cond=None, layers: nn.Sequential = None, scale_bias: float = 1, in_channels: int = 512
+):
     two_cond = emb is not None and cond is not None
     if emb is not None:
         while len(emb.shape) < len(h.shape):
@@ -446,7 +448,9 @@ class QKVAttention(nn.Module):
 
 
 class AttentionBlock(nn.Module):
-    def __init__(self, channels, num_heads=1, num_head_channels=-1, use_checkpoint=False, use_new_attention_order=False):
+    def __init__(
+        self, channels, num_heads=1, num_head_channels=-1, use_checkpoint=False, use_new_attention_order=False
+    ):
         super().__init__()
         self.channels = channels
         if num_head_channels == -1:
@@ -457,7 +461,9 @@ class AttentionBlock(nn.Module):
         self.use_checkpoint = use_checkpoint
         self.norm = normalization(channels)
         self.qkv = conv_nd(1, channels, channels * 3, 1)
-        self.attention = QKVAttention(self.num_heads) if use_new_attention_order else QKVAttentionLegacy(self.num_heads)
+        self.attention = (
+            QKVAttention(self.num_heads) if use_new_attention_order else QKVAttentionLegacy(self.num_heads)
+        )
         self.proj_out = zero_module(conv_nd(1, channels, channels, 1))
 
     def forward(self, x):
@@ -523,7 +529,9 @@ class BeatGANsUNetModel(nn.Module):
         )
 
         ch = input_ch = int(conf.channel_mult[0] * conf.model_channels)
-        self.input_blocks = nn.ModuleList([TimestepEmbedSequential(conv_nd(conf.dims, conf.in_channels, ch, 3, padding=1))])
+        self.input_blocks = nn.ModuleList(
+            [TimestepEmbedSequential(conv_nd(conf.dims, conf.in_channels, ch, 3, padding=1))]
+        )
         kwargs = dict(
             use_condition=True,
             two_cond=conf.resnet_two_cond,
@@ -592,7 +600,9 @@ class BeatGANsUNetModel(nn.Module):
                 self._feature_size += ch
 
         self.middle_block = TimestepEmbedSequential(
-            ResBlockConfig(ch, conf.embed_channels, conf.dropout, dims=conf.dims, use_checkpoint=conf.use_checkpoint, **kwargs).make_model(),
+            ResBlockConfig(
+                ch, conf.embed_channels, conf.dropout, dims=conf.dims, use_checkpoint=conf.use_checkpoint, **kwargs
+            ).make_model(),
             AttentionBlock(
                 ch,
                 use_checkpoint=conf.use_checkpoint or conf.attn_checkpoint,
@@ -600,7 +610,9 @@ class BeatGANsUNetModel(nn.Module):
                 num_head_channels=conf.num_head_channels,
                 use_new_attention_order=conf.use_new_attention_order,
             ),
-            ResBlockConfig(ch, conf.embed_channels, conf.dropout, dims=conf.dims, use_checkpoint=conf.use_checkpoint, **kwargs).make_model(),
+            ResBlockConfig(
+                ch, conf.embed_channels, conf.dropout, dims=conf.dims, use_checkpoint=conf.use_checkpoint, **kwargs
+            ).make_model(),
         )
         self._feature_size += ch
 
@@ -737,7 +749,9 @@ class BeatGANsEncoderModel(nn.Module):
             time_embed_dim = None
 
         ch = int(conf.channel_mult[0] * conf.model_channels)
-        self.input_blocks = nn.ModuleList([TimestepEmbedSequential(conv_nd(conf.dims, conf.in_channels, ch, 3, padding=1))])
+        self.input_blocks = nn.ModuleList(
+            [TimestepEmbedSequential(conv_nd(conf.dims, conf.in_channels, ch, 3, padding=1))]
+        )
         self._feature_size = ch
         resolution = conf.image_size
         for level, mult in enumerate(conf.channel_mult):
@@ -789,7 +803,14 @@ class BeatGANsEncoderModel(nn.Module):
                 self._feature_size += ch
 
         self.middle_block = TimestepEmbedSequential(
-            ResBlockConfig(ch, time_embed_dim, conf.dropout, dims=conf.dims, use_condition=conf.use_time_condition, use_checkpoint=conf.use_checkpoint).make_model(),
+            ResBlockConfig(
+                ch,
+                time_embed_dim,
+                conf.dropout,
+                dims=conf.dims,
+                use_condition=conf.use_time_condition,
+                use_checkpoint=conf.use_checkpoint,
+            ).make_model(),
             AttentionBlock(
                 ch,
                 use_checkpoint=conf.use_checkpoint,
@@ -797,7 +818,14 @@ class BeatGANsEncoderModel(nn.Module):
                 num_head_channels=conf.num_head_channels,
                 use_new_attention_order=conf.use_new_attention_order,
             ),
-            ResBlockConfig(ch, time_embed_dim, conf.dropout, dims=conf.dims, use_condition=conf.use_time_condition, use_checkpoint=conf.use_checkpoint).make_model(),
+            ResBlockConfig(
+                ch,
+                time_embed_dim,
+                conf.dropout,
+                dims=conf.dims,
+                use_condition=conf.use_time_condition,
+                use_checkpoint=conf.use_checkpoint,
+            ).make_model(),
         )
         self._feature_size += ch
 
@@ -990,16 +1018,12 @@ class GaussianDiffusionBeatGans:
         self.sqrt_recip_alphas_cumprod = np.sqrt(1.0 / self.alphas_cumprod)
         self.sqrt_recipm1_alphas_cumprod = np.sqrt(1.0 / self.alphas_cumprod - 1)
 
-        self.posterior_variance = (betas * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod))
+        self.posterior_variance = betas * (1.0 - self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
         self.posterior_log_variance_clipped = np.log(
             np.append(self.posterior_variance[1], self.posterior_variance[1:])
         )
-        self.posterior_mean_coef1 = (
-            betas * np.sqrt(self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
-        )
-        self.posterior_mean_coef2 = (
-            (1.0 - self.alphas_cumprod_prev) * np.sqrt(alphas) / (1.0 - self.alphas_cumprod)
-        )
+        self.posterior_mean_coef1 = betas * np.sqrt(self.alphas_cumprod_prev) / (1.0 - self.alphas_cumprod)
+        self.posterior_mean_coef2 = (1.0 - self.alphas_cumprod_prev) * np.sqrt(alphas) / (1.0 - self.alphas_cumprod)
 
     def sample(
         self,
@@ -1045,9 +1069,7 @@ class GaussianDiffusionBeatGans:
             + _extract_into_tensor(self.posterior_mean_coef2, t, x_t.shape) * x_t
         )
         posterior_variance = _extract_into_tensor(self.posterior_variance, t, x_t.shape)
-        posterior_log_variance_clipped = _extract_into_tensor(
-            self.posterior_log_variance_clipped, t, x_t.shape
-        )
+        posterior_log_variance_clipped = _extract_into_tensor(self.posterior_log_variance_clipped, t, x_t.shape)
         return posterior_mean, posterior_variance, posterior_log_variance_clipped
 
     def p_mean_variance(
@@ -1239,13 +1261,9 @@ class GaussianDiffusionBeatGans:
         eps = self._predict_eps_from_xstart(x, t, out["pred_xstart"])
         alpha_bar = _extract_into_tensor(self.alphas_cumprod, t, x.shape)
         alpha_bar_prev = _extract_into_tensor(self.alphas_cumprod_prev, t, x.shape)
-        sigma = eta * torch.sqrt((1 - alpha_bar_prev) / (1 - alpha_bar)) * torch.sqrt(
-            1 - alpha_bar / alpha_bar_prev
-        )
+        sigma = eta * torch.sqrt((1 - alpha_bar_prev) / (1 - alpha_bar)) * torch.sqrt(1 - alpha_bar / alpha_bar_prev)
         noise = torch.randn_like(x)
-        mean_pred = out["pred_xstart"] * torch.sqrt(alpha_bar_prev) + torch.sqrt(
-            1 - alpha_bar_prev - sigma**2
-        ) * eps
+        mean_pred = out["pred_xstart"] * torch.sqrt(alpha_bar_prev) + torch.sqrt(1 - alpha_bar_prev - sigma**2) * eps
         nonzero_mask = (t != 0).float().view(-1, *([1] * (len(x.shape) - 1)))
         sample = mean_pred + nonzero_mask * sigma * noise
         return {"sample": sample, "pred_xstart": out["pred_xstart"]}
@@ -1632,7 +1650,11 @@ class NotebookLitModel(nn.Module):
         self.eval_sampler = conf.make_eval_diffusion_conf().make_sampler()
 
     def load_ema_from_checkpoint(self, ckpt_path, map_location="cpu", strict=False):
-        state = torch.load(ckpt_path, map_location=map_location)
+        state = torch.load(
+            ckpt_path,
+            map_location=map_location,
+            weights_only=False,  # The model checkpoint contains Pytorch Lightning metadata, so we need to load it with weights_only=False
+        )
         self.load_state_dict(state["state_dict"], strict=strict)
         return state
 
