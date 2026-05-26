@@ -33,7 +33,7 @@ print(batch[0].shape)  # C, H, W
 ori = (batch + 1) / 2  # Undo normalization
 
 # %%
-# Encode images -> noise
+# Encode images
 cond = model.encode(batch.to(device))
 xT = model.encode_stochastic(batch.to(device), cond, T=250)
 
