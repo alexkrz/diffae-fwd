@@ -3,6 +3,7 @@
 
 # Directories
 /checkpoints/*
+/data/*
 
 # Artifacts
 __pycache__/
