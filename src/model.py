@@ -1086,7 +1086,7 @@ class GaussianDiffusionBeatGans:
 
         B, _C = x.shape[:2]
         assert t.shape == (B,)
-        with torch.cuda.amp.autocast(self.conf.fp16):
+        with torch.amp.autocast("cuda", enabled=self.conf.fp16):
             model_forward = model.forward(x=x, t=self._scale_timesteps(t), **model_kwargs)
         model_output = model_forward.pred
 

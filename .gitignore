@@ -4,6 +4,7 @@
 # Directories
 /checkpoints/*
 /data/*
+/results/*
 
 # Artifacts
 __pycache__/
