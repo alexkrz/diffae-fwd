@@ -1,0 +1,8 @@
+# IDE
+.vscode/
+
+# Directories
+/checkpoints/*
+
+# Artifacts
+__pycache__/
