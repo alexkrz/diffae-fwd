@@ -2,7 +2,6 @@ import copy
 import math
 from abc import abstractmethod
 from dataclasses import dataclass
-from enum import Enum
 from numbers import Number
 from typing import NamedTuple, Optional, Tuple
 
@@ -11,47 +10,12 @@ import torch
 import torch.nn as nn
 
 
-class GenerativeType(Enum):
-    """How a sample is generated."""
-
-    ddpm = "ddpm"
-    ddim = "ddim"
+def _as_str(value):
+    return value.value if hasattr(value, "value") else value
 
 
-class ModelName(Enum):
-    """Supported model classes."""
-
-    beatgans_ddpm = "beatgans_ddpm"
-    beatgans_autoenc = "beatgans_autoenc"
-
-
-class ModelType(Enum):
-    ddpm = "ddpm"
-    autoencoder = "autoencoder"
-
-    def has_autoenc(self):
-        return self in [ModelType.autoencoder]
-
-    def can_sample(self):
-        return self in [ModelType.ddpm]
-
-
-class ModelMeanType(Enum):
-    eps = "eps"
-
-
-class ModelVarType(Enum):
-    fixed_small = "fixed_small"
-    fixed_large = "fixed_large"
-
-
-class LossType(Enum):
-    mse = "mse"
-    l1 = "l1"
-
-
-class LatentNetType(Enum):
-    none = "none"
+def _is_model_type_autoencoder(model_type):
+    return _as_str(model_type) == "autoencoder"
 
 
 def betas_for_alpha_bar(num_diffusion_timesteps, alpha_bar, max_beta=0.999):
@@ -127,12 +91,12 @@ def space_timesteps(num_timesteps, section_counts):
 
 @dataclass
 class GaussianDiffusionBeatGansConfig:
-    gen_type: GenerativeType
+    gen_type: str
     betas: Tuple[float]
-    model_type: ModelType
-    model_mean_type: ModelMeanType
-    model_var_type: ModelVarType
-    loss_type: LossType
+    model_type: str
+    model_mean_type: str
+    model_var_type: str
+    loss_type: str
     rescale_timesteps: bool
     fp16: bool
     train_pred_xstart_detach: bool = True
@@ -994,9 +958,9 @@ class BeatGANsAutoencModel(BeatGANsUNetModel):
 class GaussianDiffusionBeatGans:
     def __init__(self, conf: GaussianDiffusionBeatGansConfig):
         self.conf = conf
-        self.model_mean_type = conf.model_mean_type
-        self.model_var_type = conf.model_var_type
-        self.loss_type = conf.loss_type
+        self.model_mean_type = _as_str(conf.model_mean_type)
+        self.model_var_type = _as_str(conf.model_var_type)
+        self.loss_type = _as_str(conf.loss_type)
         self.rescale_timesteps = conf.rescale_timesteps
 
         betas = np.array(conf.betas, dtype=np.float64)
@@ -1038,11 +1002,11 @@ class GaussianDiffusionBeatGans:
     ):
         if model_kwargs is None:
             model_kwargs = {}
-            if self.conf.model_type.has_autoenc():
+            if _is_model_type_autoencoder(self.conf.model_type):
                 model_kwargs["x_start"] = x_start
                 model_kwargs["cond"] = cond
 
-        if self.conf.gen_type == GenerativeType.ddpm:
+        if _as_str(self.conf.gen_type) == "ddpm":
             return self.p_sample_loop(
                 model,
                 shape=shape,
@@ -1051,7 +1015,7 @@ class GaussianDiffusionBeatGans:
                 model_kwargs=model_kwargs,
                 progress=progress,
             )
-        if self.conf.gen_type == GenerativeType.ddim:
+        if _as_str(self.conf.gen_type) == "ddim":
             return self.ddim_sample_loop(
                 model,
                 shape=shape,
@@ -1090,13 +1054,13 @@ class GaussianDiffusionBeatGans:
             model_forward = model.forward(x=x, t=self._scale_timesteps(t), **model_kwargs)
         model_output = model_forward.pred
 
-        if self.model_var_type in [ModelVarType.fixed_large, ModelVarType.fixed_small]:
+        if self.model_var_type in ["fixed_large", "fixed_small"]:
             model_variance, model_log_variance = {
-                ModelVarType.fixed_large: (
+                "fixed_large": (
                     np.append(self.posterior_variance[1], self.betas[1:]),
                     np.log(np.append(self.posterior_variance[1], self.betas[1:])),
                 ),
-                ModelVarType.fixed_small: (
+                "fixed_small": (
                     self.posterior_variance,
                     self.posterior_log_variance_clipped,
                 ),
@@ -1113,7 +1077,7 @@ class GaussianDiffusionBeatGans:
                 return x_start.clamp(-1, 1)
             return x_start
 
-        if self.model_mean_type == ModelMeanType.eps:
+        if self.model_mean_type == "eps":
             pred_xstart = process_xstart(self._predict_xstart_from_eps(x_t=x, t=t, eps=model_output))
             model_mean, _, _ = self.q_posterior_mean_variance(x_start=pred_xstart, x_t=x, t=t)
         else:
@@ -1477,10 +1441,10 @@ def _extract_into_tensor(arr, timesteps, broadcast_shape):
 class TrainConfig:
     batch_size: int = 16
     batch_size_eval: int = None
-    beatgans_gen_type: GenerativeType = GenerativeType.ddim
-    beatgans_loss_type: LossType = LossType.mse
-    beatgans_model_mean_type: ModelMeanType = ModelMeanType.eps
-    beatgans_model_var_type: ModelVarType = ModelVarType.fixed_large
+    beatgans_gen_type: str = "ddim"
+    beatgans_loss_type: str = "mse"
+    beatgans_model_mean_type: str = "eps"
+    beatgans_model_var_type: str = "fixed_large"
     beatgans_rescale_timesteps: bool = False
     beta_scheduler: str = "linear"
     diffusion_type: str = "beatgans"
@@ -1490,8 +1454,8 @@ class TrainConfig:
     fp16: bool = False
     img_size: int = 64
     model_conf: object = None
-    model_name: ModelName = None
-    model_type: ModelType = None
+    model_name: Optional[str] = None
+    model_type: Optional[str] = None
     name: str = ""
     net_attn: Tuple[int] = None
     net_beatgans_attn_head: int = 1
@@ -1507,7 +1471,7 @@ class TrainConfig:
     net_enc_grad_checkpoint: bool = False
     net_enc_num_res_blocks: int = 2
     net_enc_pool: str = "adaptivenonzero"
-    net_latent_net_type: LatentNetType = LatentNetType.none
+    net_latent_net_type: str = "none"
     net_num_input_res_blocks: int = None
     net_num_res_blocks: int = 2
     net_resblock_updown: bool = True
@@ -1539,15 +1503,15 @@ class TrainConfig:
             raise NotImplementedError(self.diffusion_type)
 
         if self.model_type is None:
-            if self.model_name == ModelName.beatgans_autoenc:
-                self.model_type = ModelType.autoencoder
-            elif self.model_name == ModelName.beatgans_ddpm:
-                self.model_type = ModelType.ddpm
+            if _as_str(self.model_name) == "beatgans_autoenc":
+                self.model_type = "autoencoder"
+            elif _as_str(self.model_name) == "beatgans_ddpm":
+                self.model_type = "ddpm"
 
         T = T if T is not None else self.T
-        if self.beatgans_gen_type == GenerativeType.ddpm:
+        if _as_str(self.beatgans_gen_type) == "ddpm":
             section_counts = [T]
-        elif self.beatgans_gen_type == GenerativeType.ddim:
+        elif _as_str(self.beatgans_gen_type) == "ddim":
             section_counts = f"ddim{T}"
         else:
             raise NotImplementedError(self.beatgans_gen_type)
@@ -1569,8 +1533,8 @@ class TrainConfig:
         return self._make_diffusion_conf(T=self.T_eval)
 
     def make_model_conf(self):
-        if self.model_name == ModelName.beatgans_ddpm:
-            self.model_type = ModelType.ddpm
+        if _as_str(self.model_name) == "beatgans_ddpm":
+            self.model_type = "ddpm"
             self.model_conf = BeatGANsUNetConfig(
                 attention_resolutions=self.net_attn,
                 channel_mult=self.net_ch_mult,
@@ -1596,9 +1560,9 @@ class TrainConfig:
             )
             return self.model_conf
 
-        if self.model_name == ModelName.beatgans_autoenc:
-            self.model_type = ModelType.autoencoder
-            if self.net_latent_net_type != LatentNetType.none:
+        if _as_str(self.model_name) == "beatgans_autoenc":
+            self.model_type = "autoencoder"
+            if _as_str(self.net_latent_net_type) != "none":
                 raise NotImplementedError("Only LatentNetType.none is supported in interpolate.py")
 
             self.model_conf = BeatGANsAutoencConfig(
@@ -1640,14 +1604,34 @@ class TrainConfig:
 class NotebookLitModel(nn.Module):
     """Minimal LitModel subset for interpolation workflows."""
 
-    def __init__(self, conf):
+    def __init__(self, conf: TrainConfig):
         super().__init__()
         self.conf = conf
-        self.model = conf.make_model_conf().make_model()
-        self.ema_model = copy.deepcopy(self.model)
+
+        model_conf = conf.make_model_conf()
+        if not isinstance(model_conf, BeatGANsAutoencConfig):
+            raise TypeError(f"Expected BeatGANsAutoencConfig, got {type(model_conf).__name__}")
+
+        model = model_conf.make_model()
+        if not isinstance(model, BeatGANsAutoencModel):
+            raise TypeError(f"Expected BeatGANsAutoencModel, got {type(model).__name__}")
+        self.model: BeatGANsAutoencModel = model
+
+        ema_model = copy.deepcopy(self.model)
+        if not isinstance(ema_model, BeatGANsAutoencModel):
+            raise TypeError(f"Expected BeatGANsAutoencModel, got {type(ema_model).__name__}")
+        self.ema_model: BeatGANsAutoencModel = ema_model
         self.ema_model.requires_grad_(False)
         self.ema_model.eval()
-        self.eval_sampler = conf.make_eval_diffusion_conf().make_sampler()
+
+        eval_diff_conf = conf.make_eval_diffusion_conf()
+        if not isinstance(eval_diff_conf, SpacedDiffusionBeatGansConfig):
+            raise TypeError(f"Expected SpacedDiffusionBeatGansConfig, got {type(eval_diff_conf).__name__}")
+
+        eval_sampler = eval_diff_conf.make_sampler()
+        if not isinstance(eval_sampler, SpacedDiffusionBeatGans):
+            raise TypeError(f"Expected SpacedDiffusionBeatGans, got {type(eval_sampler).__name__}")
+        self.eval_sampler: SpacedDiffusionBeatGans = eval_sampler
 
     def load_ema_from_checkpoint(self, ckpt_path, map_location="cpu", strict=False):
         state = torch.load(
@@ -1692,7 +1676,7 @@ def ffhq256_autoenc():
 
     # Base autoencoder defaults.
     conf.batch_size = 32
-    conf.beatgans_gen_type = GenerativeType.ddim
+    conf.beatgans_gen_type = "ddim"
     conf.beta_scheduler = "linear"
     conf.data_name = "ffhq"
     conf.diffusion_type = "beatgans"
@@ -1700,8 +1684,8 @@ def ffhq256_autoenc():
     conf.eval_every_samples = 200_000
     conf.fp16 = True
     conf.lr = 1e-4
-    conf.model_name = ModelName.beatgans_autoenc
-    conf.model_type = ModelType.autoencoder
+    conf.model_name = "beatgans_autoenc"
+    conf.model_type = "autoencoder"
     conf.net_attn = (16,)
     conf.net_beatgans_attn_head = 1
     conf.net_beatgans_embed_channels = 512
