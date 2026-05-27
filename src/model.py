@@ -1601,7 +1601,7 @@ class TrainConfig:
         raise NotImplementedError(self.model_name)
 
 
-class NotebookLitModel(nn.Module):
+class MinLitModel(nn.Module):
     """Minimal LitModel subset for interpolation workflows."""
 
     def __init__(self, conf: TrainConfig):
@@ -1633,14 +1633,8 @@ class NotebookLitModel(nn.Module):
             raise TypeError(f"Expected SpacedDiffusionBeatGans, got {type(eval_sampler).__name__}")
         self.eval_sampler: SpacedDiffusionBeatGans = eval_sampler
 
-    def load_ema_from_checkpoint(self, ckpt_path, map_location="cpu", strict=False):
-        state = torch.load(
-            ckpt_path,
-            map_location=map_location,
-            weights_only=False,  # The model checkpoint contains Pytorch Lightning metadata, so we need to load it with weights_only=False
-        )
-        self.load_state_dict(state["state_dict"], strict=strict)
-        return state
+    def load_state_dict(self, state_dict, strict=False):
+        return super().load_state_dict(state_dict, strict=strict)
 
     @torch.no_grad()
     def encode(self, x):
@@ -1653,21 +1647,13 @@ class NotebookLitModel(nn.Module):
         return out["sample"]
 
     @torch.no_grad()
-    def render(self, noise, cond=None, T=None):
+    def render(self, noise, cond=None, T=None) -> torch.Tensor:
         sampler = self.eval_sampler if T is None else self.conf._make_diffusion_conf(T).make_sampler()
         if cond is None:
             pred_img = sampler.sample(model=self.ema_model, noise=noise)
         else:
             pred_img = sampler.sample(model=self.ema_model, noise=noise, model_kwargs={"cond": cond})
         return (pred_img + 1) / 2
-
-
-def build_interpolator(conf, checkpoint_path, device="cpu", strict=False):
-    """Create and load a NotebookLitModel in one call."""
-    model = NotebookLitModel(conf)
-    model.load_ema_from_checkpoint(checkpoint_path, map_location="cpu", strict=strict)
-    model.ema_model.to(device).eval()
-    return model
 
 
 def ffhq256_autoenc():
@@ -1719,3 +1705,58 @@ def ffhq256_autoenc():
     conf.batch_size = 64
     conf.name = "ffhq256_autoenc"
     return conf
+
+
+@dataclass
+class ClsConfig:
+    name: str
+    style_ch: int = 512
+    num_classes: int = 40
+    manipulate_znormalize: bool = True
+    latent_infer_path: str = None
+
+
+class ClsModel(nn.Module):
+    """Inference-only classifier used by manipulate.ipynb."""
+
+    def __init__(self, conf: ClsConfig):
+        super().__init__()
+        self.conf = conf
+        self.classifier = nn.Linear(conf.style_ch, conf.num_classes)
+        self.ema_classifier = copy.deepcopy(self.classifier)
+
+        if conf.manipulate_znormalize:
+            if conf.latent_infer_path is None:
+                raise ValueError("latent_infer_path is required when manipulate_znormalize=True")
+            state = torch.load(conf.latent_infer_path, map_location="cpu")
+            self.register_buffer("conds_mean", state["conds_mean"][None, :].float())
+            self.register_buffer("conds_std", state["conds_std"][None, :].float())
+        else:
+            self.conds_mean = None
+            self.conds_std = None
+
+    def load_state_dict(self, state_dict, strict=False):
+        # Classifier checkpoints may include extra keys from training modules.
+        return super().load_state_dict(state_dict, strict=strict)
+
+    def normalize(self, cond):
+        if self.conds_mean is None or self.conds_std is None:
+            return cond
+        return (cond - self.conds_mean.to(cond.device)) / self.conds_std.to(cond.device)
+
+    def denormalize(self, cond):
+        if self.conds_mean is None or self.conds_std is None:
+            return cond
+        return (cond * self.conds_std.to(cond.device)) + self.conds_mean.to(cond.device)
+
+
+def ffhq256_autoenc_cls():
+    """Standalone classifier config for FFHQ256 autoencoder latents."""
+    base_conf = ffhq256_autoenc()
+    return ClsConfig(
+        name="ffhq256_autoenc_cls",
+        style_ch=base_conf.style_ch,
+        num_classes=40,
+        manipulate_znormalize=True,
+        latent_infer_path=f"checkpoints/{base_conf.name}/latent.pkl",
+    )

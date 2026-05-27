@@ -6,18 +6,21 @@ import torch
 import torch.nn.functional as F
 
 from src.dataset import ImageDataset
-from src.model import build_interpolator, ffhq256_autoenc
+from src.model import MinLitModel, ffhq256_autoenc
 
 # %%
 # Load model
 device = "cuda:0"
 conf = ffhq256_autoenc()
-model = build_interpolator(
-    conf=conf,
-    checkpoint_path=f"checkpoints/{conf.name}/last.ckpt",
-    device=device,
-    strict=False,
+model = MinLitModel(conf)
+state = torch.load(
+    f"checkpoints/{conf.name}/last.ckpt",
+    map_location="cpu",
+    weights_only=False,  # The model checkpoint contains Pytorch Lightning metadata, so we need to load it with weights_only=False
 )
+model.load_state_dict(state["state_dict"], strict=False)
+model.ema_model.to(device).eval()
+print("Loaded ema_model")
 
 # %%
 # Load dataset
