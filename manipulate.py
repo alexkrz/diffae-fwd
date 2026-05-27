@@ -5,35 +5,30 @@ import math
 import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
+from safetensors.torch import load_file
 
 from src.dataset import CelebAttrDataset, ImageDataset
-from src.model import ClsModel, MinLitModel, ffhq256_autoenc, ffhq256_autoenc_cls
+from src.model import ClsModel, EmaOnlyLitModel, ffhq256_autoenc, ffhq256_autoenc_cls
 
 # %%
 # Load ema_model
 device = "cuda:0"
 conf = ffhq256_autoenc()
-model = MinLitModel(conf)
-state = torch.load(
-    f"checkpoints/{conf.name}/last.ckpt",
-    map_location="cpu",
-    weights_only=False,  # The model checkpoint contains Pytorch Lightning metadata, so we need to load it with weights_only=False
-)
-model.load_state_dict(state["state_dict"], strict=False)
-model.ema_model.to(device).eval()
+model = EmaOnlyLitModel(conf)
+state_dict = load_file("checkpoints/safetensors/ffhq256_autoenc_ema.safetensors", device="cpu")
+model.load_ema_state_dict(state_dict, strict=False)
+model.to(device).eval()
 print("Loaded ema_model")
 
 # %%
 # Load cls_model
 cls_conf = ffhq256_autoenc_cls()
 cls_model = ClsModel(cls_conf)
-state = torch.load(
-    f"checkpoints/{cls_conf.name}/last.ckpt",
-    map_location="cpu",
-    weights_only=False,
-)
-print("latent step:", state["global_step"])
-cls_model.load_state_dict(state["state_dict"], strict=False)
+state_dict = load_file("checkpoints/safetensors/ffhq256_autoenc_cls.safetensors", device="cpu")
+cls_model.load_state_dict(state_dict, strict=False)
+# Load latent stats from autoencoder
+latent_stats = load_file("checkpoints/safetensors/ffhq256_autoenc_latent.safetensors", device="cpu")
+cls_model.set_latent_stats(latent_stats["conds_mean"], latent_stats["conds_std"])
 cls_model.to(device)
 print("Loaded cls_model")
 

@@ -4,22 +4,19 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
+from safetensors.torch import load_file
 
 from src.dataset import ImageDataset
-from src.model import MinLitModel, ffhq256_autoenc
+from src.model import EmaOnlyLitModel, ffhq256_autoenc
 
 # %%
 # Load model
 device = "cuda:0"
 conf = ffhq256_autoenc()
-model = MinLitModel(conf)
-state = torch.load(
-    f"checkpoints/{conf.name}/last.ckpt",
-    map_location="cpu",
-    weights_only=False,  # The model checkpoint contains Pytorch Lightning metadata, so we need to load it with weights_only=False
-)
-model.load_state_dict(state["state_dict"], strict=False)
-model.ema_model.to(device).eval()
+model = EmaOnlyLitModel(conf)
+state_dict = load_file("checkpoints/safetensors/ffhq256_autoenc_ema.safetensors", device="cpu")
+model.load_ema_state_dict(state_dict, strict=False)
+model.to(device).eval()
 print("Loaded ema_model")
 
 # %%

@@ -1656,6 +1656,75 @@ class MinLitModel(nn.Module):
         return (pred_img + 1) / 2
 
 
+class EmaOnlyLitModel(nn.Module):
+    """Simplified inference model that only holds EMA network weights."""
+
+    def __init__(self, conf: TrainConfig):
+        super().__init__()
+        self.conf = conf
+
+        model_conf = conf.make_model_conf()
+        if not isinstance(model_conf, BeatGANsAutoencConfig):
+            raise TypeError(f"Expected BeatGANsAutoencConfig, got {type(model_conf).__name__}")
+
+        model = model_conf.make_model()
+        if not isinstance(model, BeatGANsAutoencModel):
+            raise TypeError(f"Expected BeatGANsAutoencModel, got {type(model).__name__}")
+        self.model: BeatGANsAutoencModel = model
+        self.model.requires_grad_(False)
+        self.model.eval()
+
+        eval_diff_conf = conf.make_eval_diffusion_conf()
+        if not isinstance(eval_diff_conf, SpacedDiffusionBeatGansConfig):
+            raise TypeError(f"Expected SpacedDiffusionBeatGansConfig, got {type(eval_diff_conf).__name__}")
+
+        eval_sampler = eval_diff_conf.make_sampler()
+        if not isinstance(eval_sampler, SpacedDiffusionBeatGans):
+            raise TypeError(f"Expected SpacedDiffusionBeatGans, got {type(eval_sampler).__name__}")
+        self.eval_sampler: SpacedDiffusionBeatGans = eval_sampler
+
+    def load_ema_state_dict(self, state_dict, strict=True):
+        """Load EMA-only weights.
+
+        Accepts either plain model keys ("encoder.*", "time_embed.*", ...)
+        or full-checkpoint keys prefixed with "ema_model.".
+        """
+        model_keys = set(self.model.state_dict().keys())
+
+        if "state_dict" in state_dict and isinstance(state_dict["state_dict"], dict):
+            state_dict = state_dict["state_dict"]
+
+        if all(isinstance(k, str) for k in state_dict.keys()):
+            if any(k.startswith("ema_model.") for k in state_dict.keys()):
+                state_dict = {k[len("ema_model.") :]: v for k, v in state_dict.items() if k.startswith("ema_model.")}
+
+        # If a full model state dict is passed in (with model/ema_model keys),
+        # keep only keys that map to the single inference model.
+        if not set(state_dict.keys()).issubset(model_keys):
+            state_dict = {k: v for k, v in state_dict.items() if k in model_keys}
+
+        return self.model.load_state_dict(state_dict, strict=strict)
+
+    @torch.no_grad()
+    def encode(self, x):
+        return self.model.encoder.forward(x)
+
+    @torch.no_grad()
+    def encode_stochastic(self, x, cond, T=None):
+        sampler = self.eval_sampler if T is None else self.conf._make_diffusion_conf(T).make_sampler()
+        out = sampler.ddim_reverse_sample_loop(self.model, x, model_kwargs={"cond": cond})
+        return out["sample"]
+
+    @torch.no_grad()
+    def render(self, noise, cond=None, T=None) -> torch.Tensor:
+        sampler = self.eval_sampler if T is None else self.conf._make_diffusion_conf(T).make_sampler()
+        if cond is None:
+            pred_img = sampler.sample(model=self.model, noise=noise)
+        else:
+            pred_img = sampler.sample(model=self.model, noise=noise, model_kwargs={"cond": cond})
+        return (pred_img + 1) / 2
+
+
 def ffhq256_autoenc():
     """Standalone FFHQ-256 autoencoder config for interpolation notebooks/scripts."""
     conf = TrainConfig()
@@ -1713,7 +1782,6 @@ class ClsConfig:
     style_ch: int = 512
     num_classes: int = 40
     manipulate_znormalize: bool = True
-    latent_infer_path: str = None
 
 
 class ClsModel(nn.Module):
@@ -1724,20 +1792,16 @@ class ClsModel(nn.Module):
         self.conf = conf
         self.classifier = nn.Linear(conf.style_ch, conf.num_classes)
         self.ema_classifier = copy.deepcopy(self.classifier)
-
-        if conf.manipulate_znormalize:
-            if conf.latent_infer_path is None:
-                raise ValueError("latent_infer_path is required when manipulate_znormalize=True")
-            state = torch.load(conf.latent_infer_path, map_location="cpu")
-            self.register_buffer("conds_mean", state["conds_mean"][None, :].float())
-            self.register_buffer("conds_std", state["conds_std"][None, :].float())
-        else:
-            self.conds_mean = None
-            self.conds_std = None
+        self.register_buffer("conds_mean", None)
+        self.register_buffer("conds_std", None)
 
     def load_state_dict(self, state_dict, strict=False):
         # Classifier checkpoints may include extra keys from training modules.
         return super().load_state_dict(state_dict, strict=strict)
+
+    def set_latent_stats(self, conds_mean: torch.Tensor, conds_std: torch.Tensor):
+        self.conds_mean = conds_mean.reshape(1, -1).float()
+        self.conds_std = conds_std.reshape(1, -1).float()
 
     def normalize(self, cond):
         if self.conds_mean is None or self.conds_std is None:
@@ -1758,5 +1822,4 @@ def ffhq256_autoenc_cls():
         style_ch=base_conf.style_ch,
         num_classes=40,
         manipulate_znormalize=True,
-        latent_infer_path=f"checkpoints/{base_conf.name}/latent.pkl",
     )
