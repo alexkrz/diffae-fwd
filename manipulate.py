@@ -8,17 +8,18 @@ import torch.nn.functional as F
 from safetensors.torch import load_file
 
 from src.dataset import CelebAttrDataset, ImageDataset
-from src.model import ClsModel, EmaOnlyLitModel, ffhq256_autoenc, ffhq256_autoenc_cls
+from src.model import ClsModel, DiffAEModel, DiffAEScheduler, ffhq256_autoenc, ffhq256_autoenc_cls
 
 # %%
 # Load ema_model
 device = "cuda:0"
 conf = ffhq256_autoenc()
-model = EmaOnlyLitModel(conf)
+unet = DiffAEModel(conf)
+scheduler = DiffAEScheduler(conf)
 state_dict = load_file("checkpoints/safetensors/ffhq256_autoenc_ema.safetensors", device="cpu")
-model.load_ema_state_dict(state_dict, strict=False)
-model.to(device).eval()
-print("Loaded ema_model")
+unet.load_ema_state_dict(state_dict, strict=False)
+unet.to(device).eval()
+print("Loaded DiffAEModel + DiffAEScheduler")
 
 # %%
 # Load cls_model
@@ -41,8 +42,9 @@ print(batch.shape)  # N, C, H, W
 
 # %%
 # Encode images
-cond = model.encode(batch.to(device))
-xT = model.encode_stochastic(batch.to(device), cond, T=250)
+batch_device = batch.to(device)
+cond = unet.encode(batch_device)
+xT = scheduler.reverse_sample_loop(unet, batch_device, cond=cond, T=250)
 
 # %%
 # Add condition on cls_id
@@ -53,7 +55,7 @@ cond2 = cls_model.denormalize(cond2)
 
 # %%
 # Render conditioned image
-img = model.render(xT, cond2, T=100)
+img = (scheduler.sample_loop(unet, xT, cond=cond2, T=100) + 1) / 2
 
 # %%
 # Plot original and rendered image side by side

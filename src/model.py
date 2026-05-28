@@ -446,6 +446,10 @@ class Return(NamedTuple):
     pred: torch.Tensor
 
 
+class UNet2DModelOutput(NamedTuple):
+    sample: torch.Tensor
+
+
 @dataclass
 class BeatGANsUNetConfig:
     image_size: int = 64
@@ -1601,63 +1605,61 @@ class TrainConfig:
         raise NotImplementedError(self.model_name)
 
 
-class MinLitModel(nn.Module):
-    """Minimal LitModel subset for interpolation workflows."""
+class DiffAEScheduler:
+    """Standalone inference scheduler (diffusers-style model/scheduler split)."""
 
-    def __init__(self, conf: TrainConfig):
-        super().__init__()
+    def __init__(self, conf: TrainConfig, num_inference_steps: Optional[int] = None):
         self.conf = conf
+        self.num_inference_steps = num_inference_steps
+        self._eval_sampler = self._build_sampler(num_inference_steps)
 
-        model_conf = conf.make_model_conf()
-        if not isinstance(model_conf, BeatGANsAutoencConfig):
-            raise TypeError(f"Expected BeatGANsAutoencConfig, got {type(model_conf).__name__}")
+    def _build_sampler(self, num_inference_steps: Optional[int]) -> SpacedDiffusionBeatGans:
+        if num_inference_steps is None:
+            diff_conf = self.conf.make_eval_diffusion_conf()
+        else:
+            diff_conf = self.conf._make_diffusion_conf(num_inference_steps)
 
-        model = model_conf.make_model()
-        if not isinstance(model, BeatGANsAutoencModel):
-            raise TypeError(f"Expected BeatGANsAutoencModel, got {type(model).__name__}")
-        self.model: BeatGANsAutoencModel = model
+        if not isinstance(diff_conf, SpacedDiffusionBeatGansConfig):
+            raise TypeError(f"Expected SpacedDiffusionBeatGansConfig, got {type(diff_conf).__name__}")
 
-        ema_model = copy.deepcopy(self.model)
-        if not isinstance(ema_model, BeatGANsAutoencModel):
-            raise TypeError(f"Expected BeatGANsAutoencModel, got {type(ema_model).__name__}")
-        self.ema_model: BeatGANsAutoencModel = ema_model
-        self.ema_model.requires_grad_(False)
-        self.ema_model.eval()
+        sampler = diff_conf.make_sampler()
+        if not isinstance(sampler, SpacedDiffusionBeatGans):
+            raise TypeError(f"Expected SpacedDiffusionBeatGans, got {type(sampler).__name__}")
+        return sampler
 
-        eval_diff_conf = conf.make_eval_diffusion_conf()
-        if not isinstance(eval_diff_conf, SpacedDiffusionBeatGansConfig):
-            raise TypeError(f"Expected SpacedDiffusionBeatGansConfig, got {type(eval_diff_conf).__name__}")
+    def set_timesteps(self, num_inference_steps: int):
+        self.num_inference_steps = num_inference_steps
+        self._eval_sampler = self._build_sampler(num_inference_steps)
 
-        eval_sampler = eval_diff_conf.make_sampler()
-        if not isinstance(eval_sampler, SpacedDiffusionBeatGans):
-            raise TypeError(f"Expected SpacedDiffusionBeatGans, got {type(eval_sampler).__name__}")
-        self.eval_sampler: SpacedDiffusionBeatGans = eval_sampler
+    def _resolve_model(self, model: nn.Module) -> nn.Module:
+        # Allow passing either the wrapper Unet2DModel or the underlying network.
+        return model.unet if hasattr(model, "unet") else model
 
-    def load_state_dict(self, state_dict, strict=False):
-        return super().load_state_dict(state_dict, strict=strict)
-
-    @torch.no_grad()
-    def encode(self, x):
-        return self.ema_model.encoder.forward(x)
+    def get_sampler(self, T: Optional[int] = None) -> SpacedDiffusionBeatGans:
+        if T is None or T == self.num_inference_steps:
+            return self._eval_sampler
+        return self._build_sampler(T)
 
     @torch.no_grad()
-    def encode_stochastic(self, x, cond, T=None):
-        sampler = self.eval_sampler if T is None else self.conf._make_diffusion_conf(T).make_sampler()
-        out = sampler.ddim_reverse_sample_loop(self.ema_model, x, model_kwargs={"cond": cond})
+    def reverse_sample_loop(
+        self, model: nn.Module, sample: torch.Tensor, cond: Optional[torch.Tensor], T: Optional[int]
+    ):
+        sampler = self.get_sampler(T)
+        model_kwargs = {"cond": cond} if cond is not None else {}
+        out = sampler.ddim_reverse_sample_loop(self._resolve_model(model), sample, model_kwargs=model_kwargs)
         return out["sample"]
 
     @torch.no_grad()
-    def render(self, noise, cond=None, T=None) -> torch.Tensor:
-        sampler = self.eval_sampler if T is None else self.conf._make_diffusion_conf(T).make_sampler()
+    def sample_loop(self, model: nn.Module, noise: torch.Tensor, cond: Optional[torch.Tensor], T: Optional[int]):
+        sampler = self.get_sampler(T)
+        model = self._resolve_model(model)
         if cond is None:
-            pred_img = sampler.sample(model=self.ema_model, noise=noise)
-        else:
-            pred_img = sampler.sample(model=self.ema_model, noise=noise, model_kwargs={"cond": cond})
-        return (pred_img + 1) / 2
+            return sampler.sample(model=model, noise=noise)
+        return sampler.sample(model=model, noise=noise, model_kwargs={"cond": cond})
 
 
-class EmaOnlyLitModel(nn.Module):
-    """Simplified inference model that only holds EMA network weights."""
+class DiffAEModel(nn.Module):
+    """Inference UNet wrapper with diffusers-style forward API."""
 
     def __init__(self, conf: TrainConfig):
         super().__init__()
@@ -1670,18 +1672,36 @@ class EmaOnlyLitModel(nn.Module):
         model = model_conf.make_model()
         if not isinstance(model, BeatGANsAutoencModel):
             raise TypeError(f"Expected BeatGANsAutoencModel, got {type(model).__name__}")
-        self.model: BeatGANsAutoencModel = model
-        self.model.requires_grad_(False)
-        self.model.eval()
 
-        eval_diff_conf = conf.make_eval_diffusion_conf()
-        if not isinstance(eval_diff_conf, SpacedDiffusionBeatGansConfig):
-            raise TypeError(f"Expected SpacedDiffusionBeatGansConfig, got {type(eval_diff_conf).__name__}")
+        # Keep the actual network on .unet so schedulers can consume it directly.
+        self.unet: BeatGANsAutoencModel = model
+        self.unet.requires_grad_(False)
+        self.unet.eval()
 
-        eval_sampler = eval_diff_conf.make_sampler()
-        if not isinstance(eval_sampler, SpacedDiffusionBeatGans):
-            raise TypeError(f"Expected SpacedDiffusionBeatGans, got {type(eval_sampler).__name__}")
-        self.eval_sampler: SpacedDiffusionBeatGans = eval_sampler
+    def forward(
+        self,
+        sample: Optional[torch.Tensor] = None,
+        timestep: Optional[torch.Tensor] = None,
+        encoder_hidden_states: Optional[torch.Tensor] = None,
+        return_dict: bool = True,
+        **kwargs,
+    ):
+        # Accept both diffusers-style args and internal diffusion call kwargs (x/t).
+        if sample is None:
+            sample = kwargs.pop("x", None)
+        if timestep is None:
+            timestep = kwargs.pop("t", None)
+        if sample is None or timestep is None:
+            raise ValueError("Unet2DModel.forward expects sample/x and timestep/t")
+
+        cond = kwargs.pop("cond", None)
+        if cond is None:
+            cond = encoder_hidden_states
+
+        model_out = self.unet(x=sample, t=timestep, cond=cond, **kwargs)
+        if return_dict:
+            return UNet2DModelOutput(sample=model_out.pred)
+        return (model_out.pred,)
 
     def load_ema_state_dict(self, state_dict, strict=True):
         """Load EMA-only weights.
@@ -1689,7 +1709,7 @@ class EmaOnlyLitModel(nn.Module):
         Accepts either plain model keys ("encoder.*", "time_embed.*", ...)
         or full-checkpoint keys prefixed with "ema_model.".
         """
-        model_keys = set(self.model.state_dict().keys())
+        model_keys = set(self.unet.state_dict().keys())
 
         if "state_dict" in state_dict and isinstance(state_dict["state_dict"], dict):
             state_dict = state_dict["state_dict"]
@@ -1703,26 +1723,11 @@ class EmaOnlyLitModel(nn.Module):
         if not set(state_dict.keys()).issubset(model_keys):
             state_dict = {k: v for k, v in state_dict.items() if k in model_keys}
 
-        return self.model.load_state_dict(state_dict, strict=strict)
+        return self.unet.load_state_dict(state_dict, strict=strict)
 
     @torch.no_grad()
     def encode(self, x):
-        return self.model.encoder.forward(x)
-
-    @torch.no_grad()
-    def encode_stochastic(self, x, cond, T=None):
-        sampler = self.eval_sampler if T is None else self.conf._make_diffusion_conf(T).make_sampler()
-        out = sampler.ddim_reverse_sample_loop(self.model, x, model_kwargs={"cond": cond})
-        return out["sample"]
-
-    @torch.no_grad()
-    def render(self, noise, cond=None, T=None) -> torch.Tensor:
-        sampler = self.eval_sampler if T is None else self.conf._make_diffusion_conf(T).make_sampler()
-        if cond is None:
-            pred_img = sampler.sample(model=self.model, noise=noise)
-        else:
-            pred_img = sampler.sample(model=self.model, noise=noise, model_kwargs={"cond": cond})
-        return (pred_img + 1) / 2
+        return self.unet.encoder.forward(x)
 
 
 def ffhq256_autoenc():

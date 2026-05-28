@@ -7,17 +7,18 @@ import torch.nn.functional as F
 from safetensors.torch import load_file
 
 from src.dataset import ImageDataset
-from src.model import EmaOnlyLitModel, ffhq256_autoenc
+from src.model import DiffAEModel, DiffAEScheduler, ffhq256_autoenc
 
 # %%
 # Load model
 device = "cuda:0"
 conf = ffhq256_autoenc()
-model = EmaOnlyLitModel(conf)
+unet = DiffAEModel(conf)
+scheduler = DiffAEScheduler(conf)
 state_dict = load_file("checkpoints/safetensors/ffhq256_autoenc_ema.safetensors", device="cpu")
-model.load_ema_state_dict(state_dict, strict=False)
-model.to(device).eval()
-print("Loaded ema_model")
+unet.load_ema_state_dict(state_dict, strict=False)
+unet.to(device).eval()
+print("Loaded DiffAEModel + DiffAEScheduler")
 
 # %%
 # Load dataset
@@ -34,8 +35,9 @@ ori = (batch + 1) / 2  # Undo normalization
 
 # %%
 # Encode images
-cond = model.encode(batch.to(device))
-xT = model.encode_stochastic(batch.to(device), cond, T=250)
+batch_device = batch.to(device)
+cond = unet.encode(batch_device)
+xT = scheduler.reverse_sample_loop(unet, batch_device, cond=cond, T=250)
 
 # %%
 # Perform interpolation
@@ -60,7 +62,7 @@ intp_x = (
 ) / torch.sin(theta)
 intp_x = intp_x.view(-1, *x_shape)
 
-pred: list[torch.Tensor] = model.render(intp_x, intp, T=20)
+pred: list[torch.Tensor] = (scheduler.sample_loop(unet, intp_x, cond=intp, T=20) + 1) / 2
 
 # %%
 # Plot interpolation results
