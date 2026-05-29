@@ -11,7 +11,7 @@ from src.dataset import CelebAttrDataset, ImageDataset
 from src.model import ClsModel, DiffAEModel, DiffAEScheduler, ffhq256_autoenc, ffhq256_autoenc_cls
 
 # %%
-# Load ema_model
+# Load model
 device = "cuda:0"
 conf = ffhq256_autoenc()
 model = DiffAEModel(conf)
