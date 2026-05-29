@@ -4,6 +4,8 @@
 # Directories
 /checkpoints/*
 /data/*
+!/data/imgs_align
+!/data/imgs_interpolate
 /results/*
 
 # Artifacts
