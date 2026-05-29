@@ -1,5 +1,6 @@
 # %%
 # Imports
+import huggingface_hub
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -8,6 +9,13 @@ from safetensors.torch import load_file
 
 from src.dataset import ImageDataset
 from src.model import DiffAEModel, DiffAEScheduler, ffhq256_autoenc
+
+# %%
+# Download model checkpoints
+huggingface_hub.snapshot_download(
+    repo_id="alexkrz/diffae-ffhq256",
+    local_dir="checkpoints/diffae-ffhq256",
+)
 
 # %%
 # Load model
@@ -37,7 +45,7 @@ ori = (batch + 1) / 2  # Undo normalization
 # Encode images
 batch_device = batch.to(device)
 cond = model.encode(batch_device)
-xT = scheduler.reverse_sample_loop(model, batch_device, cond=cond, T=250)
+xT = scheduler.reverse_sample_loop(model, batch_device, cond=cond, T=250, progress=True)
 
 # %%
 # Perform interpolation
@@ -62,7 +70,7 @@ intp_x = (
 ) / torch.sin(theta)
 intp_x = intp_x.view(-1, *x_shape)
 
-pred: list[torch.Tensor] = (scheduler.sample_loop(model, intp_x, cond=intp, T=20) + 1) / 2
+pred: list[torch.Tensor] = (scheduler.sample_loop(model, intp_x, cond=intp, T=20, progress=True) + 1) / 2
 
 # %%
 # Plot interpolation results
@@ -70,6 +78,8 @@ fig, ax = plt.subplots(1, 10, figsize=(5 * 10, 5))
 ax: list[plt.Axes]
 for i in range(len(alpha)):
     ax[i].imshow(pred[i].permute(1, 2, 0).cpu())
-plt.savefig("results/compare_interpolated.png")
+results_dir = "results/compare_interpolated.png"
+plt.savefig(results_dir)
+print(f"Results saved at: {results_dir}")
 
 # %%

@@ -1271,6 +1271,7 @@ class GaussianDiffusionBeatGans:
         model_kwargs=None,
         eta=0.0,
         device=None,
+        progress=False,
     ):
         if device is None:
             device = next(model.parameters()).device
@@ -1278,6 +1279,10 @@ class GaussianDiffusionBeatGans:
         xstart_t = []
         all_t = []
         indices = list(range(self.num_timesteps))
+        if progress:
+            from tqdm.auto import tqdm
+
+            indices = tqdm(indices)
         sample = x
         for i in indices:
             t = torch.tensor([i] * len(sample), device=device)
@@ -1642,20 +1647,34 @@ class DiffAEScheduler:
 
     @torch.no_grad()
     def reverse_sample_loop(
-        self, model: nn.Module, sample: torch.Tensor, cond: Optional[torch.Tensor], T: Optional[int]
+        self,
+        model: nn.Module,
+        sample: torch.Tensor,
+        cond: Optional[torch.Tensor],
+        T: Optional[int],
+        progress: bool = False,
     ):
         sampler = self.get_sampler(T)
         model_kwargs = {"cond": cond} if cond is not None else {}
-        out = sampler.ddim_reverse_sample_loop(self._resolve_model(model), sample, model_kwargs=model_kwargs)
+        out = sampler.ddim_reverse_sample_loop(
+            self._resolve_model(model), sample, model_kwargs=model_kwargs, progress=progress
+        )
         return out["sample"]
 
     @torch.no_grad()
-    def sample_loop(self, model: nn.Module, noise: torch.Tensor, cond: Optional[torch.Tensor], T: Optional[int]):
+    def sample_loop(
+        self,
+        model: nn.Module,
+        noise: torch.Tensor,
+        cond: Optional[torch.Tensor],
+        T: Optional[int],
+        progress: bool = False,
+    ):
         sampler = self.get_sampler(T)
         model = self._resolve_model(model)
         if cond is None:
-            return sampler.sample(model=model, noise=noise)
-        return sampler.sample(model=model, noise=noise, model_kwargs={"cond": cond})
+            return sampler.sample(model=model, noise=noise, progress=progress)
+        return sampler.sample(model=model, noise=noise, model_kwargs={"cond": cond}, progress=progress)
 
 
 class DiffAEModel(nn.Module):

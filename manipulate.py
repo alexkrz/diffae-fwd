@@ -2,6 +2,7 @@
 # Imports
 import math
 
+import huggingface_hub
 import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
@@ -9,6 +10,13 @@ from safetensors.torch import load_file
 
 from src.dataset import CelebAttrDataset, ImageDataset
 from src.model import ClsModel, DiffAEModel, DiffAEScheduler, ffhq256_autoenc, ffhq256_autoenc_cls
+
+# %%
+# Download model checkpoints
+huggingface_hub.snapshot_download(
+    repo_id="alexkrz/diffae-ffhq256",
+    local_dir="checkpoints/diffae-ffhq256",
+)
 
 # %%
 # Load model
@@ -44,7 +52,7 @@ print(batch.shape)  # N, C, H, W
 # Encode images
 batch_device = batch.to(device)
 cond = model.encode(batch_device)
-xT = scheduler.reverse_sample_loop(model, batch_device, cond=cond, T=250)
+xT = scheduler.reverse_sample_loop(model, batch_device, cond=cond, T=250, progress=True)
 
 # %%
 # Add condition on cls_id
@@ -55,7 +63,7 @@ cond2 = cls_model.denormalize(cond2)
 
 # %%
 # Render conditioned image
-img: list[torch.Tensor] = (scheduler.sample_loop(model, xT, cond=cond2, T=100) + 1) / 2
+img: list[torch.Tensor] = (scheduler.sample_loop(model, xT, cond=cond2, T=100, progress=True) + 1) / 2
 
 # %%
 # Plot original and rendered image side by side
@@ -64,6 +72,8 @@ ax: list[plt.Axes]
 ori: torch.Tensor = (batch + 1) / 2
 ax[0].imshow(ori[0].permute(1, 2, 0).cpu())
 ax[1].imshow(img[0].permute(1, 2, 0).cpu())
-plt.savefig("results/compare_manipulated.png")
+results_dir = "results/compare_manipulated.png"
+plt.savefig(results_dir)
+print(f"Results saved at: {results_dir}")
 
 # %%
