@@ -1,7 +1,7 @@
-# diffae-interpolate
+# diffae-fwd
 
-This is a simplified version of the original diffae repository: <https://github.com/konpatp/diffae>. \
-We also use more recent versions of Python and Pytorch in this repository.
+This is a inference-only version of the original diffae repository: <https://github.com/konpatp/diffae>. \
+We use up-to-date versions of Python and Pytorch and try to keep other dependencies as minimal as possible.
 
 ## Setup
 
