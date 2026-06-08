@@ -22,10 +22,10 @@ huggingface_hub.snapshot_download(
 # Load model
 device = "cuda"
 conf = ffhq256_autoenc()
-model = DiffAEModel(conf)
+model = UNetModel.from_config("configs/diffae-ffhq256/unet_model.json")
 scheduler = DiffAEScheduler(conf)
 state_dict = load_file("checkpoints/diffae-ffhq256/ffhq256_autoenc_ema.safetensors", device="cpu")
-model.load_ema_state_dict(state_dict, strict=False)
+model.load_state_dict(state_dict, strict=False)
 model.to(device).eval()
 print("Loaded DiffAEModel + DiffAEScheduler")
 

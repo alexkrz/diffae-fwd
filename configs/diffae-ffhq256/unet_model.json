@@ -1,0 +1,19 @@
+{
+  "image_size": 64,
+  "in_channels": 3,
+  "model_channels": 192,
+  "out_channels": 6,
+  "num_res_blocks": 3,
+  "attention_resolutions": [2, 4, 8],
+  "dropout": 0.1,
+  "channel_mult": [1, 2, 3, 4],
+  "num_classes": 1000,
+  "use_checkpoint": false,
+  "use_fp16": false,
+  "num_heads": 4,
+  "num_head_channels": 64,
+  "num_heads_upsample": -1,
+  "use_scale_shift_norm": true,
+  "resblock_updown": true,
+  "use_new_attention_order": true
+}
