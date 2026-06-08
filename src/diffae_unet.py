@@ -1,6 +1,5 @@
 import math
 from abc import abstractmethod
-from dataclasses import dataclass
 from numbers import Number
 from typing import NamedTuple, Optional, Tuple
 
@@ -16,104 +15,6 @@ from .nn import (
     timestep_embedding,
     zero_module,
 )
-
-
-# Configs
-@dataclass
-class ResBlockConfig:
-    channels: int
-    emb_channels: int
-    dropout: float
-    out_channels: int = None
-    use_condition: bool = True
-    use_conv: bool = False
-    dims: int = 2
-    use_checkpoint: bool = False
-    up: bool = False
-    down: bool = False
-    two_cond: bool = False
-    cond_emb_channels: int = None
-    has_lateral: bool = False
-    lateral_channels: int = None
-    use_zero_module: bool = True
-
-    def __post_init__(self):
-        self.out_channels = self.out_channels or self.channels
-        self.cond_emb_channels = self.cond_emb_channels or self.emb_channels
-
-    def make_model(self):
-        return ResBlock(self)
-
-
-@dataclass
-class BeatGANsUNetConfig:
-    image_size: int = 64
-    in_channels: int = 3
-    model_channels: int = 64
-    out_channels: int = 3
-    num_res_blocks: int = 2
-    num_input_res_blocks: int = None
-    embed_channels: int = 512
-    attention_resolutions: Tuple[int] = (16,)
-    time_embed_channels: int = None
-    dropout: float = 0.1
-    channel_mult: Tuple[int] = (1, 2, 4, 8)
-    input_channel_mult: Tuple[int] = None
-    conv_resample: bool = True
-    dims: int = 2
-    num_classes: int = None
-    use_checkpoint: bool = False
-    num_heads: int = 1
-    num_head_channels: int = -1
-    num_heads_upsample: int = -1
-    resblock_updown: bool = True
-    use_new_attention_order: bool = False
-    resnet_two_cond: bool = False
-    resnet_cond_channels: int = None
-    resnet_use_zero_module: bool = True
-    attn_checkpoint: bool = False
-
-    def make_model(self):
-        return BeatGANsUNetModel(self)
-
-
-@dataclass
-class BeatGANsEncoderConfig:
-    image_size: int
-    in_channels: int
-    model_channels: int
-    out_hid_channels: int
-    out_channels: int
-    num_res_blocks: int
-    attention_resolutions: Tuple[int]
-    dropout: float = 0
-    channel_mult: Tuple[int] = (1, 2, 4, 8)
-    use_time_condition: bool = True
-    conv_resample: bool = True
-    dims: int = 2
-    use_checkpoint: bool = False
-    num_heads: int = 1
-    num_head_channels: int = -1
-    resblock_updown: bool = False
-    use_new_attention_order: bool = False
-    pool: str = "adaptivenonzero"
-
-    def make_model(self):
-        return BeatGANsEncoderModel(self)
-
-
-@dataclass
-class BeatGANsAutoencConfig(BeatGANsUNetConfig):
-    enc_out_channels: int = 512
-    enc_attn_resolutions: Tuple[int] = None
-    enc_pool: str = "depthconv"
-    enc_num_res_block: int = 2
-    enc_channel_mult: Tuple[int] = None
-    enc_grad_checkpoint: bool = False
-    latent_net_conf: object = None
-
-    def make_model(self):
-        return BeatGANsAutoencModel(self)
 
 
 # Definitions
@@ -217,50 +118,82 @@ def apply_conditions(
 
 
 class ResBlock(TimestepBlock):
-    def __init__(self, conf: ResBlockConfig):
+    def __init__(
+        self,
+        channels,
+        emb_channels,
+        dropout,
+        out_channels=None,
+        use_condition=True,
+        use_conv=False,
+        dims=2,
+        use_checkpoint=False,
+        up=False,
+        down=False,
+        two_cond=False,
+        cond_emb_channels=None,
+        has_lateral=False,
+        lateral_channels=None,
+        use_zero_module=True,
+    ):
         super().__init__()
-        self.conf = conf
+        self.channels = channels
+        self.emb_channels = emb_channels
+        self.dropout = dropout
+        self.out_channels = out_channels or channels
+        self.use_condition = use_condition
+        self.use_conv = use_conv
+        self.dims = dims
+        self.use_checkpoint = use_checkpoint
+        self.up = up
+        self.down = down
+        self.two_cond = two_cond
+        self.cond_emb_channels = cond_emb_channels or emb_channels
+        self.has_lateral = has_lateral
+        self.lateral_channels = lateral_channels
+        self.use_zero_module = use_zero_module
+
         self.in_layers = nn.Sequential(
-            normalization(conf.channels),
+            normalization(self.channels),
             nn.SiLU(),
-            conv_nd(conf.dims, conf.channels, conf.out_channels, 3, padding=1),
+            conv_nd(self.dims, self.channels, self.out_channels, 3, padding=1),
         )
-        self.updown = conf.up or conf.down
-        if conf.up:
-            self.h_upd = Upsample(conf.channels, False, conf.dims)
-            self.x_upd = Upsample(conf.channels, False, conf.dims)
-        elif conf.down:
-            self.h_upd = Downsample(conf.channels, False, conf.dims)
-            self.x_upd = Downsample(conf.channels, False, conf.dims)
+        self.updown = self.up or self.down
+        if self.up:
+            self.h_upd = Upsample(self.channels, False, self.dims)
+            self.x_upd = Upsample(self.channels, False, self.dims)
+        elif self.down:
+            self.h_upd = Downsample(self.channels, False, self.dims)
+            self.x_upd = Downsample(self.channels, False, self.dims)
         else:
             self.h_upd = self.x_upd = nn.Identity()
 
-        if conf.use_condition:
-            self.emb_layers = nn.Sequential(nn.SiLU(), linear(conf.emb_channels, 2 * conf.out_channels))
-            if conf.two_cond:
-                self.cond_emb_layers = nn.Sequential(nn.SiLU(), linear(conf.cond_emb_channels, conf.out_channels))
-            conv = conv_nd(conf.dims, conf.out_channels, conf.out_channels, 3, padding=1)
-            if conf.use_zero_module:
+        if self.use_condition:
+            self.emb_layers = nn.Sequential(nn.SiLU(), linear(self.emb_channels, 2 * self.out_channels))
+            if self.two_cond:
+                self.cond_emb_layers = nn.Sequential(nn.SiLU(), linear(self.cond_emb_channels, self.out_channels))
+            conv = conv_nd(self.dims, self.out_channels, self.out_channels, 3, padding=1)
+            if self.use_zero_module:
                 conv = zero_module(conv)
             self.out_layers = nn.Sequential(
-                normalization(conf.out_channels),
+                normalization(self.out_channels),
                 nn.SiLU(),
-                nn.Dropout(p=conf.dropout),
+                nn.Dropout(p=self.dropout),
                 conv,
             )
 
-        if conf.out_channels == conf.channels:
+        if self.out_channels == self.channels:
             self.skip_connection = nn.Identity()
         else:
-            kernel_size = 3 if conf.use_conv else 1
-            padding = 1 if conf.use_conv else 0
-            self.skip_connection = conv_nd(conf.dims, conf.channels, conf.out_channels, kernel_size, padding=padding)
+            kernel_size = 3 if self.use_conv else 1
+            padding = 1 if self.use_conv else 0
+            self.skip_connection = conv_nd(self.dims, self.channels, self.out_channels, kernel_size, padding=padding)
 
     def forward(self, x, emb=None, cond=None, lateral=None):
-        return torch_checkpoint(self._forward, (x, emb, cond, lateral), self.conf.use_checkpoint)
+        return torch_checkpoint(self._forward, (x, emb, cond, lateral), self.use_checkpoint)
 
     def _forward(self, x, emb=None, cond=None, lateral=None):
-        if self.conf.has_lateral:
+        if self.has_lateral:
             assert lateral is not None
             x = torch.cat([x, lateral], dim=1)
 
@@ -273,9 +206,9 @@ class ResBlock(TimestepBlock):
         else:
             h = self.in_layers(x)
 
-        if self.conf.use_condition:
+        if self.use_condition:
             emb_out = self.emb_layers(emb).type(h.dtype) if emb is not None else None
-            if self.conf.two_cond:
+            if self.two_cond:
                 cond_out = self.cond_emb_layers(cond).type(h.dtype) if cond is not None else None
                 if cond_out is not None:
                     while len(cond_out.shape) < len(h.shape):
@@ -288,7 +221,7 @@ class ResBlock(TimestepBlock):
                 cond=cond_out,
                 layers=self.out_layers,
                 scale_bias=1,
-                in_channels=self.conf.out_channels,
+                in_channels=self.out_channels,
             )
 
         return self.skip_connection(x) + h
@@ -368,83 +301,112 @@ class Return(NamedTuple):
 
 
 class BeatGANsUNetModel(nn.Module):
-    def __init__(self, conf: BeatGANsUNetConfig):
+    def __init__(
+        self,
+        image_size=64,
+        in_channels=3,
+        model_channels=64,
+        out_channels=3,
+        num_res_blocks=2,
+        num_input_res_blocks=None,
+        embed_channels=512,
+        attention_resolutions=(16,),
+        time_embed_channels=None,
+        dropout=0.1,
+        channel_mult=(1, 2, 4, 8),
+        input_channel_mult=None,
+        conv_resample=True,
+        dims=2,
+        num_classes=None,
+        use_checkpoint=False,
+        num_heads=1,
+        num_head_channels=-1,
+        num_heads_upsample=-1,
+        resblock_updown=True,
+        use_new_attention_order=False,
+        resnet_two_cond=False,
+        resnet_cond_channels=None,
+        resnet_use_zero_module=True,
+        attn_checkpoint=False,
+    ):
         super().__init__()
-        self.conf = conf
-        if conf.num_heads_upsample == -1:
-            self.num_heads_upsample = conf.num_heads
+        self.channel_mult = channel_mult
+        self.model_channels = model_channels
+        self.resnet_two_cond = resnet_two_cond
+        if num_heads_upsample == -1:
+            self.num_heads_upsample = num_heads
+        else:
+            self.num_heads_upsample = num_heads_upsample
         self.dtype = torch.float32
-        self.time_emb_channels = conf.time_embed_channels or conf.model_channels
+        self.time_emb_channels = time_embed_channels or model_channels
         self.time_embed = nn.Sequential(
-            linear(self.time_emb_channels, conf.embed_channels),
+            linear(self.time_emb_channels, embed_channels),
             nn.SiLU(),
-            linear(conf.embed_channels, conf.embed_channels),
+            linear(embed_channels, embed_channels),
         )
 
-        ch = input_ch = int(conf.channel_mult[0] * conf.model_channels)
-        self.input_blocks = nn.ModuleList(
-            [TimestepEmbedSequential(conv_nd(conf.dims, conf.in_channels, ch, 3, padding=1))]
-        )
+        ch = input_ch = int(channel_mult[0] * model_channels)
+        self.input_blocks = nn.ModuleList([TimestepEmbedSequential(conv_nd(dims, in_channels, ch, 3, padding=1))])
         kwargs = dict(
             use_condition=True,
-            two_cond=conf.resnet_two_cond,
-            use_zero_module=conf.resnet_use_zero_module,
-            cond_emb_channels=conf.resnet_cond_channels,
+            two_cond=resnet_two_cond,
+            use_zero_module=resnet_use_zero_module,
+            cond_emb_channels=resnet_cond_channels,
         )
 
         self._feature_size = ch
-        input_block_chans = [[] for _ in range(len(conf.channel_mult))]
+        input_block_chans = [[] for _ in range(len(channel_mult))]
         input_block_chans[0].append(ch)
-        self.input_num_blocks = [0 for _ in range(len(conf.channel_mult))]
+        self.input_num_blocks = [0 for _ in range(len(channel_mult))]
         self.input_num_blocks[0] = 1
-        self.output_num_blocks = [0 for _ in range(len(conf.channel_mult))]
+        self.output_num_blocks = [0 for _ in range(len(channel_mult))]
 
-        resolution = conf.image_size
-        for level, mult in enumerate(conf.input_channel_mult or conf.channel_mult):
-            for _ in range(conf.num_input_res_blocks or conf.num_res_blocks):
+        resolution = image_size
+        for level, mult in enumerate(input_channel_mult or channel_mult):
+            for _ in range(num_input_res_blocks or num_res_blocks):
                 layers = [
-                    ResBlockConfig(
+                    ResBlock(
                         ch,
-                        conf.embed_channels,
-                        conf.dropout,
-                        out_channels=int(mult * conf.model_channels),
-                        dims=conf.dims,
-                        use_checkpoint=conf.use_checkpoint,
+                        embed_channels,
+                        dropout,
+                        out_channels=int(mult * model_channels),
+                        dims=dims,
+                        use_checkpoint=use_checkpoint,
                         **kwargs,
-                    ).make_model()
+                    )
                 ]
-                ch = int(mult * conf.model_channels)
-                if resolution in conf.attention_resolutions:
+                ch = int(mult * model_channels)
+                if resolution in attention_resolutions:
                     layers.append(
                         AttentionBlock(
                             ch,
-                            use_checkpoint=conf.use_checkpoint or conf.attn_checkpoint,
-                            num_heads=conf.num_heads,
-                            num_head_channels=conf.num_head_channels,
-                            use_new_attention_order=conf.use_new_attention_order,
+                            use_checkpoint=use_checkpoint or attn_checkpoint,
+                            num_heads=num_heads,
+                            num_head_channels=num_head_channels,
+                            use_new_attention_order=use_new_attention_order,
                         )
                     )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
                 self._feature_size += ch
                 input_block_chans[level].append(ch)
                 self.input_num_blocks[level] += 1
-            if level != len(conf.channel_mult) - 1:
+            if level != len(channel_mult) - 1:
                 resolution //= 2
                 out_ch = ch
                 self.input_blocks.append(
                     TimestepEmbedSequential(
-                        ResBlockConfig(
+                        ResBlock(
                             ch,
-                            conf.embed_channels,
-                            conf.dropout,
+                            embed_channels,
+                            dropout,
                             out_channels=out_ch,
-                            dims=conf.dims,
-                            use_checkpoint=conf.use_checkpoint,
+                            dims=dims,
+                            use_checkpoint=use_checkpoint,
                             down=True,
                             **kwargs,
-                        ).make_model()
-                        if conf.resblock_updown
-                        else Downsample(ch, conf.conv_resample, dims=conf.dims, out_channels=out_ch)
+                        )
+                        if resblock_updown
+                        else Downsample(ch, conv_resample, dims=dims, out_channels=out_ch)
                     )
                 )
                 ch = out_ch
@@ -453,89 +415,85 @@ class BeatGANsUNetModel(nn.Module):
                 self._feature_size += ch
 
         self.middle_block = TimestepEmbedSequential(
-            ResBlockConfig(
-                ch, conf.embed_channels, conf.dropout, dims=conf.dims, use_checkpoint=conf.use_checkpoint, **kwargs
-            ).make_model(),
+            ResBlock(ch, embed_channels, dropout, dims=dims, use_checkpoint=use_checkpoint, **kwargs),
             AttentionBlock(
                 ch,
-                use_checkpoint=conf.use_checkpoint or conf.attn_checkpoint,
-                num_heads=conf.num_heads,
-                num_head_channels=conf.num_head_channels,
-                use_new_attention_order=conf.use_new_attention_order,
+                use_checkpoint=use_checkpoint or attn_checkpoint,
+                num_heads=num_heads,
+                num_head_channels=num_head_channels,
+                use_new_attention_order=use_new_attention_order,
             ),
-            ResBlockConfig(
-                ch, conf.embed_channels, conf.dropout, dims=conf.dims, use_checkpoint=conf.use_checkpoint, **kwargs
-            ).make_model(),
+            ResBlock(ch, embed_channels, dropout, dims=dims, use_checkpoint=use_checkpoint, **kwargs),
         )
         self._feature_size += ch
 
         self.output_blocks = nn.ModuleList([])
-        for level, mult in list(enumerate(conf.channel_mult))[::-1]:
-            for i in range(conf.num_res_blocks + 1):
+        for level, mult in list(enumerate(channel_mult))[::-1]:
+            for i in range(num_res_blocks + 1):
                 try:
                     ich = input_block_chans[level].pop()
                 except IndexError:
                     ich = 0
                 layers = [
-                    ResBlockConfig(
+                    ResBlock(
                         channels=ch + ich,
-                        emb_channels=conf.embed_channels,
-                        dropout=conf.dropout,
-                        out_channels=int(conf.model_channels * mult),
-                        dims=conf.dims,
-                        use_checkpoint=conf.use_checkpoint,
+                        emb_channels=embed_channels,
+                        dropout=dropout,
+                        out_channels=int(model_channels * mult),
+                        dims=dims,
+                        use_checkpoint=use_checkpoint,
                         has_lateral=True if ich > 0 else False,
                         lateral_channels=None,
                         **kwargs,
-                    ).make_model()
+                    )
                 ]
-                ch = int(conf.model_channels * mult)
-                if resolution in conf.attention_resolutions:
+                ch = int(model_channels * mult)
+                if resolution in attention_resolutions:
                     layers.append(
                         AttentionBlock(
                             ch,
-                            use_checkpoint=conf.use_checkpoint or conf.attn_checkpoint,
+                            use_checkpoint=use_checkpoint or attn_checkpoint,
                             num_heads=self.num_heads_upsample,
-                            num_head_channels=conf.num_head_channels,
-                            use_new_attention_order=conf.use_new_attention_order,
+                            num_head_channels=num_head_channels,
+                            use_new_attention_order=use_new_attention_order,
                         )
                     )
-                if level and i == conf.num_res_blocks:
+                if level and i == num_res_blocks:
                     resolution *= 2
                     out_ch = ch
                     layers.append(
-                        ResBlockConfig(
+                        ResBlock(
                             ch,
-                            conf.embed_channels,
-                            conf.dropout,
+                            embed_channels,
+                            dropout,
                             out_channels=out_ch,
-                            dims=conf.dims,
-                            use_checkpoint=conf.use_checkpoint,
+                            dims=dims,
+                            use_checkpoint=use_checkpoint,
                             up=True,
                             **kwargs,
-                        ).make_model()
-                        if conf.resblock_updown
-                        else Upsample(ch, conf.conv_resample, dims=conf.dims, out_channels=out_ch)
+                        )
+                        if resblock_updown
+                        else Upsample(ch, conv_resample, dims=dims, out_channels=out_ch)
                     )
                 self.output_blocks.append(TimestepEmbedSequential(*layers))
                 self.output_num_blocks[level] += 1
                 self._feature_size += ch
 
-        if conf.resnet_use_zero_module:
+        if resnet_use_zero_module:
             self.out = nn.Sequential(
                 normalization(ch),
                 nn.SiLU(),
-                zero_module(conv_nd(conf.dims, input_ch, conf.out_channels, 3, padding=1)),
+                zero_module(conv_nd(dims, input_ch, out_channels, 3, padding=1)),
             )
         else:
             self.out = nn.Sequential(
                 normalization(ch),
                 nn.SiLU(),
-                conv_nd(conf.dims, input_ch, conf.out_channels, 3, padding=1),
+                conv_nd(dims, input_ch, out_channels, 3, padding=1),
             )
 
     def forward(self, x, t, y=None, **kwargs):
-        hs = [[] for _ in range(len(self.conf.channel_mult))]
+        hs = [[] for _ in range(len(self.channel_mult))]
         emb = self.time_embed(timestep_embedding(t, self.time_emb_channels))
         h = x.type(self.dtype)
         k = 0
@@ -560,116 +518,134 @@ class BeatGANsUNetModel(nn.Module):
 
 
 class BeatGANsEncoderModel(nn.Module):
-    def __init__(self, conf: BeatGANsEncoderConfig):
+    def __init__(
+        self,
+        image_size,
+        in_channels,
+        model_channels,
+        out_hid_channels,
+        out_channels,
+        num_res_blocks,
+        attention_resolutions,
+        dropout=0,
+        channel_mult=(1, 2, 4, 8),
+        use_time_condition=True,
+        conv_resample=True,
+        dims=2,
+        use_checkpoint=False,
+        num_heads=1,
+        num_head_channels=-1,
+        resblock_updown=False,
+        use_new_attention_order=False,
+        pool="adaptivenonzero",
+    ):
         super().__init__()
-        self.conf = conf
         self.dtype = torch.float32
-        self.model_channels = conf.model_channels
+        self.model_channels = model_channels
+        self.use_time_condition = use_time_condition
 
-        if conf.use_time_condition:
-            time_embed_dim = conf.model_channels * 4
+        if use_time_condition:
+            time_embed_dim = model_channels * 4
             self.time_embed = nn.Sequential(
-                linear(conf.model_channels, time_embed_dim),
+                linear(model_channels, time_embed_dim),
                 nn.SiLU(),
                 linear(time_embed_dim, time_embed_dim),
             )
         else:
             time_embed_dim = None
 
-        ch = int(conf.channel_mult[0] * conf.model_channels)
-        self.input_blocks = nn.ModuleList(
-            [TimestepEmbedSequential(conv_nd(conf.dims, conf.in_channels, ch, 3, padding=1))]
-        )
+        ch = int(channel_mult[0] * model_channels)
+        self.input_blocks = nn.ModuleList([TimestepEmbedSequential(conv_nd(dims, in_channels, ch, 3, padding=1))])
         self._feature_size = ch
-        resolution = conf.image_size
-        for level, mult in enumerate(conf.channel_mult):
-            for _ in range(conf.num_res_blocks):
+        resolution = image_size
+        for level, mult in enumerate(channel_mult):
+            for _ in range(num_res_blocks):
                 layers = [
-                    ResBlockConfig(
+                    ResBlock(
                         ch,
                         time_embed_dim,
-                        conf.dropout,
-                        out_channels=int(mult * conf.model_channels),
-                        dims=conf.dims,
-                        use_condition=conf.use_time_condition,
-                        use_checkpoint=conf.use_checkpoint,
-                    ).make_model()
+                        dropout,
+                        out_channels=int(mult * model_channels),
+                        dims=dims,
+                        use_condition=use_time_condition,
+                        use_checkpoint=use_checkpoint,
+                    )
                 ]
-                ch = int(mult * conf.model_channels)
-                if resolution in conf.attention_resolutions:
+                ch = int(mult * model_channels)
+                if resolution in attention_resolutions:
                     layers.append(
                         AttentionBlock(
                             ch,
-                            use_checkpoint=conf.use_checkpoint,
-                            num_heads=conf.num_heads,
-                            num_head_channels=conf.num_head_channels,
-                            use_new_attention_order=conf.use_new_attention_order,
+                            use_checkpoint=use_checkpoint,
+                            num_heads=num_heads,
+                            num_head_channels=num_head_channels,
+                            use_new_attention_order=use_new_attention_order,
                         )
                     )
                 self.input_blocks.append(TimestepEmbedSequential(*layers))
                 self._feature_size += ch
-            if level != len(conf.channel_mult) - 1:
+            if level != len(channel_mult) - 1:
                 resolution //= 2
                 out_ch = ch
                 self.input_blocks.append(
                     TimestepEmbedSequential(
-                        ResBlockConfig(
+                        ResBlock(
                             ch,
                             time_embed_dim,
-                            conf.dropout,
+                            dropout,
                             out_channels=out_ch,
-                            dims=conf.dims,
-                            use_condition=conf.use_time_condition,
-                            use_checkpoint=conf.use_checkpoint,
+                            dims=dims,
+                            use_condition=use_time_condition,
+                            use_checkpoint=use_checkpoint,
                             down=True,
-                        ).make_model()
-                        if conf.resblock_updown
-                        else Downsample(ch, conf.conv_resample, dims=conf.dims, out_channels=out_ch)
+                        )
+                        if resblock_updown
+                        else Downsample(ch, conv_resample, dims=dims, out_channels=out_ch)
                     )
                 )
                 ch = out_ch
                 self._feature_size += ch
 
         self.middle_block = TimestepEmbedSequential(
-            ResBlockConfig(
+            ResBlock(
                 ch,
                 time_embed_dim,
-                conf.dropout,
-                dims=conf.dims,
-                use_condition=conf.use_time_condition,
-                use_checkpoint=conf.use_checkpoint,
-            ).make_model(),
+                dropout,
+                dims=dims,
+                use_condition=use_time_condition,
+                use_checkpoint=use_checkpoint,
+            ),
             AttentionBlock(
                 ch,
-                use_checkpoint=conf.use_checkpoint,
-                num_heads=conf.num_heads,
-                num_head_channels=conf.num_head_channels,
-                use_new_attention_order=conf.use_new_attention_order,
+                use_checkpoint=use_checkpoint,
+                num_heads=num_heads,
+                num_head_channels=num_head_channels,
+                use_new_attention_order=use_new_attention_order,
             ),
-            ResBlockConfig(
+            ResBlock(
                 ch,
                 time_embed_dim,
-                conf.dropout,
-                dims=conf.dims,
-                use_condition=conf.use_time_condition,
-                use_checkpoint=conf.use_checkpoint,
-            ).make_model(),
+                dropout,
+                dims=dims,
+                use_condition=use_time_condition,
+                use_checkpoint=use_checkpoint,
+            ),
         )
         self._feature_size += ch
 
-        if conf.pool == "adaptivenonzero":
+        if pool == "adaptivenonzero":
             self.out = nn.Sequential(
                 normalization(ch),
                 nn.SiLU(),
                 nn.AdaptiveAvgPool2d((1, 1)),
-                conv_nd(conf.dims, ch, conf.out_channels, 1),
+                conv_nd(dims, ch, out_channels, 1),
                 nn.Flatten(),
             )
         else:
-            raise NotImplementedError(f"Unexpected {conf.pool} pooling")
+            raise NotImplementedError(f"Unexpected {pool} pooling")
 
     def forward(self, x, t=None, return_2d_feature=False):
-        if self.conf.use_time_condition:
+        if self.use_time_condition:
             emb = self.time_embed(timestep_embedding(t, self.model_channels))
         else:
             emb = None
@@ -711,34 +687,95 @@ class AutoencReturn(NamedTuple):
 
 
 class BeatGANsAutoencModel(BeatGANsUNetModel):
-    def __init__(self, conf: BeatGANsAutoencConfig):
-        super().__init__(conf)
-        self.conf = conf
+    def __init__(
+        self,
+        image_size=64,
+        in_channels=3,
+        model_channels=64,
+        out_channels=3,
+        num_res_blocks=2,
+        num_input_res_blocks=None,
+        embed_channels=512,
+        attention_resolutions=(16,),
+        time_embed_channels=None,
+        dropout=0.1,
+        channel_mult=(1, 2, 4, 8),
+        input_channel_mult=None,
+        conv_resample=True,
+        dims=2,
+        num_classes=None,
+        use_checkpoint=False,
+        num_heads=1,
+        num_head_channels=-1,
+        num_heads_upsample=-1,
+        resblock_updown=True,
+        use_new_attention_order=False,
+        resnet_two_cond=False,
+        resnet_cond_channels=None,
+        resnet_use_zero_module=True,
+        attn_checkpoint=False,
+        enc_out_channels=512,
+        enc_attn_resolutions=None,
+        enc_pool="depthconv",
+        enc_num_res_block=2,
+        enc_channel_mult=None,
+        enc_grad_checkpoint=False,
+        latent_net_conf=None,
+    ):
+        super().__init__(
+            image_size=image_size,
+            in_channels=in_channels,
+            model_channels=model_channels,
+            out_channels=out_channels,
+            num_res_blocks=num_res_blocks,
+            num_input_res_blocks=num_input_res_blocks,
+            embed_channels=embed_channels,
+            attention_resolutions=attention_resolutions,
+            time_embed_channels=time_embed_channels,
+            dropout=dropout,
+            channel_mult=channel_mult,
+            input_channel_mult=input_channel_mult,
+            conv_resample=conv_resample,
+            dims=dims,
+            num_classes=num_classes,
+            use_checkpoint=use_checkpoint,
+            num_heads=num_heads,
+            num_head_channels=num_head_channels,
+            num_heads_upsample=num_heads_upsample,
+            resblock_updown=resblock_updown,
+            use_new_attention_order=use_new_attention_order,
+            resnet_two_cond=resnet_two_cond,
+            resnet_cond_channels=resnet_cond_channels,
+            resnet_use_zero_module=resnet_use_zero_module,
+            attn_checkpoint=attn_checkpoint,
+        )
+        self.model_channels = model_channels
+        self.resnet_two_cond = resnet_two_cond
         self.time_embed = TimeStyleSeperateEmbed(
-            time_channels=conf.model_channels,
-            time_out_channels=conf.embed_channels,
+            time_channels=model_channels,
+            time_out_channels=embed_channels,
         )
 
-        self.encoder = BeatGANsEncoderConfig(
-            image_size=conf.image_size,
-            in_channels=conf.in_channels,
-            model_channels=conf.model_channels,
-            out_hid_channels=conf.enc_out_channels,
-            out_channels=conf.enc_out_channels,
-            num_res_blocks=conf.enc_num_res_block,
-            attention_resolutions=(conf.enc_attn_resolutions or conf.attention_resolutions),
-            dropout=conf.dropout,
-            channel_mult=conf.enc_channel_mult or conf.channel_mult,
+        self.encoder = BeatGANsEncoderModel(
+            image_size=image_size,
+            in_channels=in_channels,
+            model_channels=model_channels,
+            out_hid_channels=enc_out_channels,
+            out_channels=enc_out_channels,
+            num_res_blocks=enc_num_res_block,
+            attention_resolutions=(enc_attn_resolutions or attention_resolutions),
+            dropout=dropout,
+            channel_mult=enc_channel_mult or channel_mult,
             use_time_condition=False,
-            conv_resample=conf.conv_resample,
-            dims=conf.dims,
-            use_checkpoint=conf.use_checkpoint or conf.enc_grad_checkpoint,
-            num_heads=conf.num_heads,
-            num_head_channels=conf.num_head_channels,
-            resblock_updown=conf.resblock_updown,
-            use_new_attention_order=conf.use_new_attention_order,
-            pool=conf.enc_pool,
-        ).make_model()
+            conv_resample=conv_resample,
+            dims=dims,
+            use_checkpoint=use_checkpoint or enc_grad_checkpoint,
+            num_heads=num_heads,
+            num_head_channels=num_head_channels,
+            resblock_updown=resblock_updown,
+            use_new_attention_order=use_new_attention_order,
+            pool=enc_pool,
+        )
 
     def encode(self, x):
         cond = self.encoder.forward(x)
@@ -754,13 +791,13 @@ class BeatGANsAutoencModel(BeatGANsUNetModel):
             cond = self.encode(x_start)["cond"]
 
         if t is not None:
-            _t_emb = timestep_embedding(t, self.conf.model_channels)
-            _t_cond_emb = timestep_embedding(t_cond, self.conf.model_channels)
+            _t_emb = timestep_embedding(t, self.model_channels)
+            _t_cond_emb = timestep_embedding(t_cond, self.model_channels)
         else:
             _t_emb = None
             _t_cond_emb = None
 
-        if self.conf.resnet_two_cond:
+        if self.resnet_two_cond:
             res = self.time_embed.forward(time_emb=_t_emb, cond=cond, time_cond_emb=_t_cond_emb)
             emb = res.time_emb
             cond_emb = res.emb
@@ -775,7 +812,7 @@ class BeatGANsAutoencModel(BeatGANsUNetModel):
         mid_cond_emb = cond_emb
         dec_cond_emb = cond_emb
 
-        hs = [[] for _ in range(len(self.conf.channel_mult))]
+        hs = [[] for _ in range(len(self.channel_mult))]
 
         if x is not None:
             h = x.type(self.dtype)
@@ -788,7 +825,7 @@ class BeatGANsAutoencModel(BeatGANsUNetModel):
             h = self.middle_block(h, emb=mid_time_emb, cond=mid_cond_emb)
         else:
             h = None
-            hs = [[] for _ in range(len(self.conf.channel_mult))]
+            hs = [[] for _ in range(len(self.channel_mult))]
 
         k = 0
         for i in range(len(self.output_num_blocks)):
@@ -806,7 +843,8 @@ class BeatGANsAutoencModel(BeatGANsUNetModel):
 
 
 if __name__ == "__main__":
-    autoenc_cfg = BeatGANsAutoencConfig(
+    # Example for ffhq256 dataset
+    diffae_auotoencoder = BeatGANsAutoencModel(
         image_size=256,
         in_channels=3,
         model_channels=128,
@@ -822,7 +860,6 @@ if __name__ == "__main__":
         num_head_channels=-1,
         resblock_updown=True,
         use_new_attention_order=False,
-        # Additional BeatGANsAutoencConfig / BeatGANsUNetConfig args.
         num_classes=None,
         num_heads_upsample=-1,
         num_input_res_blocks=None,
@@ -838,5 +875,3 @@ if __name__ == "__main__":
         enc_grad_checkpoint=False,
         latent_net_conf=None,
     )
-
-    diffae_auotoencoder = BeatGANsAutoencModel(autoenc_cfg)

@@ -1,5 +1,7 @@
 # %%
 # Imports
+import json
+
 import huggingface_hub
 import matplotlib.pyplot as plt
 import numpy as np
@@ -8,7 +10,7 @@ import torch.nn.functional as F
 from safetensors.torch import load_file
 
 from src.dataset import ImageDataset
-from src.diffae_unet import BeatGANsAutoencConfig, BeatGANsAutoencModel
+from src.diffae_unet import BeatGANsAutoencModel
 from src.model import DiffAEModel, DiffAEScheduler, ffhq256_autoenc
 
 # %%
@@ -22,39 +24,9 @@ huggingface_hub.snapshot_download(
 # Load model
 device = "cuda"
 conf = ffhq256_autoenc()
-autoenc_cfg = BeatGANsAutoencConfig(
-    image_size=256,
-    in_channels=3,
-    model_channels=128,
-    out_channels=3,
-    num_res_blocks=2,
-    attention_resolutions=(16,),
-    dropout=0.1,
-    channel_mult=(1, 1, 2, 2, 4, 4),
-    conv_resample=True,
-    dims=2,
-    use_checkpoint=False,
-    num_heads=1,
-    num_head_channels=-1,
-    resblock_updown=True,
-    use_new_attention_order=False,
-    # Additional BeatGANsAutoencConfig / BeatGANsUNetConfig args.
-    num_classes=None,
-    num_heads_upsample=-1,
-    num_input_res_blocks=None,
-    embed_channels=512,
-    resnet_two_cond=True,
-    resnet_use_zero_module=True,
-    resnet_cond_channels=None,
-    enc_out_channels=512,
-    enc_attn_resolutions=None,
-    enc_pool="adaptivenonzero",
-    enc_num_res_block=2,
-    enc_channel_mult=(1, 1, 2, 2, 4, 4, 4),
-    enc_grad_checkpoint=False,
-    latent_net_conf=None,
-)
-model = BeatGANsAutoencModel(autoenc_cfg)
+with open("configs/diffae-ffhq256/autoenc_model.json", "r", encoding="utf-8") as f:
+    autoenc_cfg = json.load(f)
+model = BeatGANsAutoencModel(**autoenc_cfg)
 scheduler = DiffAEScheduler(conf)
 state_dict = load_file("checkpoints/diffae-ffhq256/ffhq256_autoenc_ema.safetensors", device="cpu")
 model.load_state_dict(state_dict, strict=True)
