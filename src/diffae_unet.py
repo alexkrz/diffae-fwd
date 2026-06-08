@@ -5,6 +5,7 @@ from typing import NamedTuple, Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from .nn import (
     avg_pool_nd,
@@ -25,12 +26,24 @@ def torch_checkpoint(func, args, flag, preserve_rng_state=False):
 
 
 class TimestepBlock(nn.Module):
+    """
+    Any module where forward() takes timestep embeddings as a second argument.
+    """
+
     @abstractmethod
     def forward(self, x, emb=None, cond=None, lateral=None):
+        """
+        Apply the module to `x` given `emb` timestep embeddings.
+        """
         pass
 
 
 class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
+    """
+    A sequential module that passes timestep embeddings to the children that
+    support it as an extra input.
+    """
+
     def forward(self, x, emb=None, cond=None, lateral=None):
         for layer in self:
             if isinstance(layer, TimestepBlock):
@@ -41,6 +54,15 @@ class TimestepEmbedSequential(nn.Sequential, TimestepBlock):
 
 
 class Upsample(nn.Module):
+    """
+    An upsampling layer with an optional convolution.
+
+    :param channels: channels in the inputs and outputs.
+    :param use_conv: a bool determining if a convolution is applied.
+    :param dims: determines if the signal is 1D, 2D, or 3D. If 3D, then
+                 upsampling occurs in the inner-two dimensions.
+    """
+
     def __init__(self, channels, use_conv, dims=2, out_channels=None):
         super().__init__()
         self.channels = channels
@@ -53,15 +75,24 @@ class Upsample(nn.Module):
     def forward(self, x):
         assert x.shape[1] == self.channels
         if self.dims == 3:
-            x = nn.functional.interpolate(x, (x.shape[2], x.shape[3] * 2, x.shape[4] * 2), mode="nearest")
+            x = F.interpolate(x, (x.shape[2], x.shape[3] * 2, x.shape[4] * 2), mode="nearest")
         else:
-            x = nn.functional.interpolate(x, scale_factor=2, mode="nearest")
+            x = F.interpolate(x, scale_factor=2, mode="nearest")
         if self.use_conv:
             x = self.conv(x)
         return x
 
 
 class Downsample(nn.Module):
+    """
+    A downsampling layer with an optional convolution.
+
+    :param channels: channels in the inputs and outputs.
+    :param use_conv: a bool determining if a convolution is applied.
+    :param dims: determines if the signal is 1D, 2D, or 3D. If 3D, then
+                 downsampling occurs in the inner-two dimensions.
+    """
+
     def __init__(self, channels, use_conv, dims=2, out_channels=None):
         super().__init__()
         self.channels = channels
@@ -118,6 +149,22 @@ def apply_conditions(
 
 
 class ResBlock(TimestepBlock):
+    """
+    A residual block that can optionally change the number of channels.
+
+    :param channels: the number of input channels.
+    :param emb_channels: the number of timestep embedding channels.
+    :param dropout: the rate of dropout.
+    :param out_channels: if specified, the number of out channels.
+    :param use_conv: if True and out_channels is specified, use a spatial
+        convolution instead of a smaller 1x1 convolution to change the
+        channels in the skip connection.
+    :param dims: determines if the signal is 1D, 2D, or 3D.
+    :param use_checkpoint: if True, use gradient checkpointing on this module.
+    :param up: if True, use this block for upsampling.
+    :param down: if True, use this block for downsampling.
+    """
+
     def __init__(
         self,
         channels,
@@ -228,11 +275,21 @@ class ResBlock(TimestepBlock):
 
 
 class QKVAttentionLegacy(nn.Module):
+    """
+    A module which performs QKV attention. Matches legacy QKVAttention + input/ouput heads shaping
+    """
+
     def __init__(self, n_heads):
         super().__init__()
         self.n_heads = n_heads
 
     def forward(self, qkv):
+        """
+        Apply QKV attention.
+
+        :param qkv: an [N x (H * 3 * C) x T] tensor of Qs, Ks, and Vs.
+        :return: an [N x (H * C) x T] tensor after attention.
+        """
         bs, width, length = qkv.shape
         assert width % (3 * self.n_heads) == 0
         ch = width // (3 * self.n_heads)
@@ -245,11 +302,21 @@ class QKVAttentionLegacy(nn.Module):
 
 
 class QKVAttention(nn.Module):
+    """
+    A module which performs QKV attention and splits in a different order.
+    """
+
     def __init__(self, n_heads):
         super().__init__()
         self.n_heads = n_heads
 
     def forward(self, qkv):
+        """
+        Apply QKV attention.
+
+        :param qkv: an [N x (3 * H * C) x T] tensor of Qs, Ks, and Vs.
+        :return: an [N x (H * C) x T] tensor after attention.
+        """
         bs, width, length = qkv.shape
         assert width % (3 * self.n_heads) == 0
         ch = width // (3 * self.n_heads)
@@ -266,22 +333,40 @@ class QKVAttention(nn.Module):
 
 
 class AttentionBlock(nn.Module):
+    """
+    An attention block that allows spatial positions to attend to each other.
+
+    Originally ported from here, but adapted to the N-d case.
+    https://github.com/hojonathanho/diffusion/blob/1e0dceb3b3495bbe19116a5e1b3596cd0706c543/diffusion_tf/models/unet.py#L66.
+    """
+
     def __init__(
-        self, channels, num_heads=1, num_head_channels=-1, use_checkpoint=False, use_new_attention_order=False
+        self,
+        channels,
+        num_heads=1,
+        num_head_channels=-1,
+        use_checkpoint=False,
+        use_new_attention_order=False,
     ):
         super().__init__()
         self.channels = channels
         if num_head_channels == -1:
             self.num_heads = num_heads
         else:
-            assert channels % num_head_channels == 0
+            assert channels % num_head_channels == 0, (
+                f"q,k,v channels {channels} is not divisible by num_head_channels {num_head_channels}"
+            )
             self.num_heads = channels // num_head_channels
         self.use_checkpoint = use_checkpoint
         self.norm = normalization(channels)
         self.qkv = conv_nd(1, channels, channels * 3, 1)
-        self.attention = (
-            QKVAttention(self.num_heads) if use_new_attention_order else QKVAttentionLegacy(self.num_heads)
-        )
+        if use_new_attention_order:
+            # split qkv before split heads
+            self.attention = QKVAttention(self.num_heads)
+        else:
+            # split heads before split qkv
+            self.attention = QKVAttentionLegacy(self.num_heads)
+
         self.proj_out = zero_module(conv_nd(1, channels, channels, 1))
 
     def forward(self, x):
@@ -301,6 +386,36 @@ class Return(NamedTuple):
 
 
 class BeatGANsUNetModel(nn.Module):
+    """
+    The full UNet model with attention and timestep embedding.
+
+    :param in_channels: channels in the input Tensor.
+    :param model_channels: base channel count for the model.
+    :param out_channels: channels in the output Tensor.
+    :param num_res_blocks: number of residual blocks per downsample.
+    :param attention_resolutions: a collection of downsample rates at which
+        attention will take place. May be a set, list, or tuple.
+        For example, if this contains 4, then at 4x downsampling, attention
+        will be used.
+    :param dropout: the dropout probability.
+    :param channel_mult: channel multiplier for each level of the UNet.
+    :param conv_resample: if True, use learned convolutions for upsampling and
+        downsampling.
+    :param dims: determines if the signal is 1D, 2D, or 3D.
+    :param num_classes: if specified (as an int), then this model will be
+        class-conditional with `num_classes` classes.
+    :param use_checkpoint: use gradient checkpointing to reduce memory usage.
+    :param num_heads: the number of attention heads in each attention layer.
+    :param num_heads_channels: if specified, ignore num_heads and instead use
+                               a fixed channel width per attention head.
+    :param num_heads_upsample: works with num_heads to set a different number
+                               of heads for upsampling. Deprecated.
+    :param use_scale_shift_norm: use a FiLM-like conditioning mechanism.
+    :param resblock_updown: use residual blocks for up/downsampling.
+    :param use_new_attention_order: use a different attention pattern for potentially
+                                    increased efficiency.
+    """
+
     def __init__(
         self,
         image_size=64,
@@ -330,6 +445,7 @@ class BeatGANsUNetModel(nn.Module):
         attn_checkpoint=False,
     ):
         super().__init__()
+
         self.channel_mult = channel_mult
         self.model_channels = model_channels
         self.resnet_two_cond = resnet_two_cond
@@ -338,6 +454,7 @@ class BeatGANsUNetModel(nn.Module):
         else:
             self.num_heads_upsample = num_heads_upsample
         self.dtype = torch.float32
+
         self.time_emb_channels = time_embed_channels or model_channels
         self.time_embed = nn.Sequential(
             linear(self.time_emb_channels, embed_channels),
@@ -493,6 +610,14 @@ class BeatGANsUNetModel(nn.Module):
             )
 
     def forward(self, x, t, y=None, **kwargs):
+        """
+        Apply the model to an input batch.
+
+        :param x: an [N x C x ...] Tensor of inputs.
+        :param timesteps: a 1-D batch of timesteps.
+        :param y: an [N] Tensor of labels, if class-conditional.
+        :return: an [N x C x ...] Tensor of outputs.
+        """
         hs = [[] for _ in range(len(self.channel_mult))]
         emb = self.time_embed(timestep_embedding(t, self.time_emb_channels))
         h = x.type(self.dtype)
@@ -518,6 +643,12 @@ class BeatGANsUNetModel(nn.Module):
 
 
 class BeatGANsEncoderModel(nn.Module):
+    """
+    The half UNet model with attention and timestep embedding.
+
+    For usage, see UNet.
+    """
+
     def __init__(
         self,
         image_size,
