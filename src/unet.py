@@ -1,7 +1,8 @@
 # Source: https://github.com/openai/guided-diffusion/blob/main/guided_diffusion/unet.py
-from abc import abstractmethod
-
+import json
 import math
+from abc import abstractmethod
+from pathlib import Path
 
 import numpy as np
 import torch as th
@@ -10,13 +11,13 @@ import torch.nn.functional as F
 
 # from .fp16_util import convert_module_to_f16, convert_module_to_f32
 from .nn import (
+    avg_pool_nd,
     checkpoint,
     conv_nd,
     linear,
-    avg_pool_nd,
-    zero_module,
     normalization,
     timestep_embedding,
+    zero_module,
 )
 
 
@@ -617,6 +618,18 @@ class UNetModel(nn.Module):
         )
 
 
+    @classmethod
+    def from_config(cls, config_path):
+        with Path(config_path).open("r", encoding="utf-8") as f:
+            config = json.load(f)
+
+        for field in ("attention_resolutions", "channel_mult"):
+            if isinstance(config.get(field), list):
+                config[field] = tuple(config[field])
+
+        return cls(**config)
+
+
     def forward(self, x, timesteps, y=None):
         """
         Apply the model to an input batch.
@@ -839,6 +852,18 @@ class EncoderUNetModel(nn.Module):
             )
         else:
             raise NotImplementedError(f"Unexpected {pool} pooling")
+
+
+    @classmethod
+    def from_config(cls, config_path):
+        with Path(config_path).open("r", encoding="utf-8") as f:
+            config = json.load(f)
+
+        for field in ("attention_resolutions", "channel_mult"):
+            if isinstance(config.get(field), list):
+                config[field] = tuple(config[field])
+
+        return cls(**config)
 
 
     def forward(self, x, timesteps):

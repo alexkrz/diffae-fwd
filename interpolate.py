@@ -9,6 +9,7 @@ from safetensors.torch import load_file
 
 from src.dataset import ImageDataset
 from src.model import DiffAEModel, DiffAEScheduler, ffhq256_autoenc
+from src.unet import UNetModel
 
 # %%
 # Download model checkpoints
