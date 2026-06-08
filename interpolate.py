@@ -9,7 +9,7 @@ from safetensors.torch import load_file
 
 from src.dataset import ImageDataset
 from src.model import DiffAEModel, DiffAEScheduler, ffhq256_autoenc
-from src.unet import UNetModel
+from src.unet import EncoderUNetModel, UNetModel
 
 # %%
 # Download model checkpoints
@@ -22,10 +22,10 @@ huggingface_hub.snapshot_download(
 # Load model
 device = "cuda"
 conf = ffhq256_autoenc()
-model = UNetModel.from_config("configs/diffae-ffhq256/unet_model.json")
+model = EncoderUNetModel.from_config("configs/diffae-ffhq256/encoder_unet_model.json")
 scheduler = DiffAEScheduler(conf)
 state_dict = load_file("checkpoints/diffae-ffhq256/ffhq256_autoenc_ema.safetensors", device="cpu")
-model.load_state_dict(state_dict, strict=False)
+model.load_state_dict(state_dict, strict=True)
 model.to(device).eval()
 print("Loaded DiffAEModel + DiffAEScheduler")
 
