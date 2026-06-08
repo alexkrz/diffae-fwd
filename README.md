@@ -34,3 +34,4 @@ The scripts contain cell definitions that can be executed in interactive mode in
 
 - [ ] Add gradio demo
 - [ ] Add detect_align.py script
+- [ ] Restructure code to align with guided-diffusion repo
