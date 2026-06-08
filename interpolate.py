@@ -59,6 +59,7 @@ scheduler = DiffAEScheduler(conf)
 state_dict = load_file("checkpoints/diffae-ffhq256/ffhq256_autoenc_ema.safetensors", device="cpu")
 model.load_state_dict(state_dict, strict=True)
 model.to(device).eval()
+model.requires_grad_(False)
 print("Loaded DiffAEModel + DiffAEScheduler")
 
 # %%
@@ -77,7 +78,8 @@ ori = (batch + 1) / 2  # Undo normalization
 # %%
 # Encode images
 batch_device = batch.to(device)
-cond = model.encode(batch_device)
+cond_dict = model.encode(batch_device)
+cond = cond_dict["cond"]
 xT = scheduler.reverse_sample_loop(model, batch_device, cond=cond, T=250, progress=True)
 
 # %%
