@@ -1,7 +1,79 @@
+import math
 from typing import Tuple
 
 import numpy as np
 import torch
+
+
+def betas_for_alpha_bar(num_diffusion_timesteps, alpha_bar, max_beta=0.999):
+    """Create betas that discretize a continuous alpha_bar(t) curve."""
+    betas = []
+    for i in range(num_diffusion_timesteps):
+        t1 = i / num_diffusion_timesteps
+        t2 = (i + 1) / num_diffusion_timesteps
+        betas.append(min(1 - alpha_bar(t2) / alpha_bar(t1), max_beta))
+    return np.array(betas)
+
+
+def get_named_beta_schedule(schedule_name, num_diffusion_timesteps):
+    """Return a beta schedule compatible with the original diffusion configs."""
+    if schedule_name == "linear":
+        scale = 1000 / num_diffusion_timesteps
+        beta_start = scale * 0.0001
+        beta_end = scale * 0.02
+        return np.linspace(beta_start, beta_end, num_diffusion_timesteps, dtype=np.float64)
+    if schedule_name == "cosine":
+        return betas_for_alpha_bar(
+            num_diffusion_timesteps,
+            lambda t: math.cos((t + 0.008) / 1.008 * math.pi / 2) ** 2,
+        )
+
+    const_schedules = {
+        "const0.01": 0.01,
+        "const0.015": 0.015,
+        "const0.008": 0.008,
+        "const0.0065": 0.0065,
+        "const0.0055": 0.0055,
+        "const0.0045": 0.0045,
+        "const0.0035": 0.0035,
+        "const0.0025": 0.0025,
+        "const0.0015": 0.0015,
+    }
+    if schedule_name in const_schedules:
+        scale = 1000 / num_diffusion_timesteps
+        return np.array([scale * const_schedules[schedule_name]] * num_diffusion_timesteps, dtype=np.float64)
+
+    raise NotImplementedError(f"unknown beta schedule: {schedule_name}")
+
+
+def space_timesteps(num_timesteps, section_counts):
+    """Select the spaced timestep subset used by DDPM/DDIM evaluation."""
+    if isinstance(section_counts, str):
+        if section_counts.startswith("ddim"):
+            desired_count = int(section_counts[len("ddim") :])
+            for i in range(1, num_timesteps):
+                if len(range(0, num_timesteps, i)) == desired_count:
+                    return set(range(0, num_timesteps, i))
+            raise ValueError(f"cannot create exactly {num_timesteps} steps with an integer stride")
+        section_counts = [int(x) for x in section_counts.split(",")]
+
+    size_per = num_timesteps // len(section_counts)
+    extra = num_timesteps % len(section_counts)
+    start_idx = 0
+    all_steps = []
+    for i, section_count in enumerate(section_counts):
+        size = size_per + (1 if i < extra else 0)
+        if size < section_count:
+            raise ValueError(f"cannot divide section of {size} steps into {section_count}")
+        frac_stride = 1 if section_count <= 1 else (size - 1) / (section_count - 1)
+        cur_idx = 0.0
+        taken_steps = []
+        for _ in range(section_count):
+            taken_steps.append(start_idx + round(cur_idx))
+            cur_idx += frac_stride
+        all_steps += taken_steps
+        start_idx += size
+    return set(all_steps)
 
 
 def _extract_into_tensor(arr, timesteps, broadcast_shape):
@@ -12,6 +84,22 @@ def _extract_into_tensor(arr, timesteps, broadcast_shape):
 
 
 class GaussianDiffusionBeatGans:
+    """
+    Utilities for training and sampling diffusion models.
+
+    Ported directly from here, and then adapted over time to further experimentation.
+    https://github.com/hojonathanho/diffusion/blob/1e0dceb3b3495bbe19116a5e1b3596cd0706c543/diffusion_tf/diffusion_utils_2.py#L42
+
+    :param betas: a 1-D numpy array of betas for each diffusion timestep,
+                  starting at T and going to 1.
+    :param model_mean_type: a ModelMeanType determining what the model outputs.
+    :param model_var_type: a ModelVarType determining how variance is output.
+    :param loss_type: a LossType determining the loss function to use.
+    :param rescale_timesteps: if True, pass floating point timesteps into the
+                              model so that they are always scaled like in the
+                              original paper (0 to 1000).
+    """
+
     def __init__(
         self,
         *,
@@ -539,6 +627,14 @@ class SpacedDiffusionBeatGans(GaussianDiffusionBeatGans):
 
 if __name__ == "__main__":
     # Example for ffhq256 dataset
+    gen_type = "ddim"
+    beta_scheduler = "linear"
+    T = 1000
+    betas = get_named_beta_schedule(beta_scheduler, T)
+    T_eval = 20
+    section_counts = f"ddim{T_eval}" if gen_type == "ddim" else [T_eval]
+    use_timesteps = space_timesteps(num_timesteps=T, section_counts=section_counts)
+
     scheduler = SpacedDiffusionBeatGans(
         gen_type="ddim",
         betas=np.linspace(0.0001, 0.02, 1000, dtype=np.float64),
