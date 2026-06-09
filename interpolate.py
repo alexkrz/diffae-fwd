@@ -10,6 +10,7 @@ import torch.nn.functional as F
 from safetensors.torch import load_file
 
 from src.dataset import ImageDataset
+from src.diffae_diffusion import SpacedDiffusionBeatGans
 from src.diffae_unet import BeatGANsAutoencModel
 from src.model import DiffAEModel, DiffAEScheduler, ffhq256_autoenc
 
@@ -23,11 +24,22 @@ huggingface_hub.snapshot_download(
 # %%
 # Load model
 device = "cuda"
-conf = ffhq256_autoenc()
+# conf = ffhq256_autoenc()
 with open("configs/diffae-ffhq256/autoenc_model.json", "r", encoding="utf-8") as f:
     autoenc_cfg = json.load(f)
 model = BeatGANsAutoencModel(**autoenc_cfg)
-scheduler = DiffAEScheduler(conf)
+scheduler = SpacedDiffusionBeatGans(
+    gen_type="ddim",
+    betas=np.linspace(0.0001, 0.02, 1000, dtype=np.float64),
+    model_type="autoencoder",
+    model_mean_type="eps",
+    model_var_type="fixed_large",
+    loss_type="mse",
+    rescale_timesteps=False,
+    fp16=True,
+    train_pred_xstart_detach=True,
+    use_timesteps=tuple(range(0, 1000, 50)),
+)
 state_dict = load_file("checkpoints/diffae-ffhq256/ffhq256_autoenc_ema.safetensors", device="cpu")
 model.load_state_dict(state_dict, strict=True)
 model.to(device).eval()
@@ -36,13 +48,13 @@ print("Loaded DiffAEModel + DiffAEScheduler")
 
 # %%
 # Load dataset
-data = ImageDataset("data/imgs_interpolate", image_size=conf.img_size, exts=["jpg", "JPG", "png"], do_augment=False)
-batch = torch.stack(
-    [
-        data[0]["img"],
-        data[1]["img"],
-    ]
+data = ImageDataset(
+    "data/imgs_interpolate",
+    image_size=autoenc_cfg["image_size"],
+    exts=["jpg", "JPG", "png"],
+    do_augment=False,
 )
+batch = torch.stack([data[0]["img"], data[1]["img"]])
 print(type(batch[0]))
 print(batch[0].shape)  # C, H, W
 ori = (batch + 1) / 2  # Undo normalization
