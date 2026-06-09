@@ -31,14 +31,6 @@ class SpacedDiffusionBeatGansConfig(GaussianDiffusionBeatGansConfig):
 
 
 # Defintions
-def _as_str(value):
-    return value.value if hasattr(value, "value") else value
-
-
-def _is_model_type_autoencoder(model_type):
-    return _as_str(model_type) == "autoencoder"
-
-
 def _extract_into_tensor(arr, timesteps, broadcast_shape):
     res = torch.from_numpy(arr).to(device=timesteps.device)[timesteps].float()
     while len(res.shape) < len(broadcast_shape):
@@ -49,9 +41,9 @@ def _extract_into_tensor(arr, timesteps, broadcast_shape):
 class GaussianDiffusionBeatGans:
     def __init__(self, conf: GaussianDiffusionBeatGansConfig):
         self.conf = conf
-        self.model_mean_type = _as_str(conf.model_mean_type)
-        self.model_var_type = _as_str(conf.model_var_type)
-        self.loss_type = _as_str(conf.loss_type)
+        self.model_mean_type = conf.model_mean_type
+        self.model_var_type = conf.model_var_type
+        self.loss_type = conf.loss_type
         self.rescale_timesteps = conf.rescale_timesteps
 
         betas = np.array(conf.betas, dtype=np.float64)
@@ -93,11 +85,11 @@ class GaussianDiffusionBeatGans:
     ):
         if model_kwargs is None:
             model_kwargs = {}
-            if _is_model_type_autoencoder(self.conf.model_type):
+            if self.conf.model_type == "autoencoder":
                 model_kwargs["x_start"] = x_start
                 model_kwargs["cond"] = cond
 
-        if _as_str(self.conf.gen_type) == "ddpm":
+        if self.conf.gen_type == "ddpm":
             return self.p_sample_loop(
                 model,
                 shape=shape,
@@ -106,7 +98,7 @@ class GaussianDiffusionBeatGans:
                 model_kwargs=model_kwargs,
                 progress=progress,
             )
-        if _as_str(self.conf.gen_type) == "ddim":
+        if self.conf.gen_type == "ddim":
             return self.ddim_sample_loop(
                 model,
                 shape=shape,
