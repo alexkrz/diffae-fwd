@@ -1,5 +1,7 @@
 # %%
 # Imports
+import json
+
 import huggingface_hub
 import matplotlib.pyplot as plt
 import numpy as np
@@ -8,7 +10,8 @@ import torch.nn.functional as F
 from safetensors.torch import load_file
 
 from src.dataset import ImageDataset
-from src.model import DiffAEModel, DiffAEScheduler, ffhq256_autoenc
+from src.diffae_diffusion import DiffAEScheduler
+from src.diffae_unet import BeatGANsAutoencModel
 
 # %%
 # Download model checkpoints
@@ -20,23 +23,28 @@ huggingface_hub.snapshot_download(
 # %%
 # Load model
 device = "cuda"
-conf = ffhq256_autoenc()
-model = DiffAEModel(conf)
-scheduler = DiffAEScheduler(conf)
+# conf = ffhq256_autoenc()
+with open("configs/diffae-ffhq256/autoenc_model.json", "r", encoding="utf-8") as f:
+    autoenc_cfg = json.load(f)
+with open("configs/diffae-ffhq256/scheduler.json", "r", encoding="utf-8") as f:
+    scheduler_cfg = json.load(f)
+model = BeatGANsAutoencModel(**autoenc_cfg)
+scheduler = DiffAEScheduler(**scheduler_cfg)
 state_dict = load_file("checkpoints/diffae-ffhq256/ffhq256_autoenc_ema.safetensors", device="cpu")
-model.load_ema_state_dict(state_dict, strict=False)
+model.load_state_dict(state_dict, strict=True)
 model.to(device).eval()
+model.requires_grad_(False)
 print("Loaded DiffAEModel + DiffAEScheduler")
 
 # %%
 # Load dataset
-data = ImageDataset("data/imgs_interpolate", image_size=conf.img_size, exts=["jpg", "JPG", "png"], do_augment=False)
-batch = torch.stack(
-    [
-        data[0]["img"],
-        data[1]["img"],
-    ]
+data = ImageDataset(
+    "data/imgs_interpolate",
+    image_size=autoenc_cfg["image_size"],
+    exts=["jpg", "JPG", "png"],
+    do_augment=False,
 )
+batch = torch.stack([data[0]["img"], data[1]["img"]])
 print(type(batch[0]))
 print(batch[0].shape)  # C, H, W
 ori = (batch + 1) / 2  # Undo normalization
@@ -44,7 +52,8 @@ ori = (batch + 1) / 2  # Undo normalization
 # %%
 # Encode images
 batch_device = batch.to(device)
-cond = model.encode(batch_device)
+cond_dict = model.encode(batch_device)
+cond = cond_dict["cond"]
 xT = scheduler.reverse_sample_loop(model, batch_device, cond=cond, T=250, progress=True)
 
 # %%

@@ -1,0 +1,13 @@
+{
+    "gen_type": "ddim",
+    "beta_scheduler": "linear",
+    "T": 1000,
+    "T_eval": 20,
+    "model_type": "autoencoder",
+    "model_mean_type": "eps",
+    "model_var_type": "fixed_large",
+    "loss_type": "mse",
+    "rescale_timesteps": false,
+    "fp16": true,
+    "train_pred_xstart_detach": true
+}
