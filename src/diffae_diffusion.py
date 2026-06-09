@@ -1,36 +1,9 @@
-from dataclasses import dataclass
 from typing import Tuple
 
 import numpy as np
 import torch
 
 
-# Configs
-@dataclass
-class GaussianDiffusionBeatGansConfig:
-    gen_type: str
-    betas: Tuple[float]
-    model_type: str
-    model_mean_type: str
-    model_var_type: str
-    loss_type: str
-    rescale_timesteps: bool
-    fp16: bool
-    train_pred_xstart_detach: bool = True
-
-    def make_sampler(self):
-        return GaussianDiffusionBeatGans(self)
-
-
-@dataclass
-class SpacedDiffusionBeatGansConfig(GaussianDiffusionBeatGansConfig):
-    use_timesteps: Tuple[int] = None
-
-    def make_sampler(self):
-        return SpacedDiffusionBeatGans(self)
-
-
-# Defintions
 def _extract_into_tensor(arr, timesteps, broadcast_shape):
     res = torch.from_numpy(arr).to(device=timesteps.device)[timesteps].float()
     while len(res.shape) < len(broadcast_shape):
@@ -39,14 +12,29 @@ def _extract_into_tensor(arr, timesteps, broadcast_shape):
 
 
 class GaussianDiffusionBeatGans:
-    def __init__(self, conf: GaussianDiffusionBeatGansConfig):
-        self.conf = conf
-        self.model_mean_type = conf.model_mean_type
-        self.model_var_type = conf.model_var_type
-        self.loss_type = conf.loss_type
-        self.rescale_timesteps = conf.rescale_timesteps
+    def __init__(
+        self,
+        *,
+        gen_type: str,
+        betas,
+        model_type: str,
+        model_mean_type: str,
+        model_var_type: str,
+        loss_type: str,
+        rescale_timesteps: bool,
+        fp16: bool,
+        train_pred_xstart_detach: bool = True,
+    ):
+        self.gen_type = gen_type
+        self.model_type = model_type
+        self.model_mean_type = model_mean_type
+        self.model_var_type = model_var_type
+        self.loss_type = loss_type
+        self.rescale_timesteps = rescale_timesteps
+        self.fp16 = fp16
+        self.train_pred_xstart_detach = train_pred_xstart_detach
 
-        betas = np.array(conf.betas, dtype=np.float64)
+        betas = np.array(betas, dtype=np.float64)
         self.betas = betas
         assert len(betas.shape) == 1, "betas must be 1-D"
         assert (betas > 0).all() and (betas <= 1).all()
@@ -85,11 +73,11 @@ class GaussianDiffusionBeatGans:
     ):
         if model_kwargs is None:
             model_kwargs = {}
-            if self.conf.model_type == "autoencoder":
+            if self.model_type == "autoencoder":
                 model_kwargs["x_start"] = x_start
                 model_kwargs["cond"] = cond
 
-        if self.conf.gen_type == "ddpm":
+        if self.gen_type == "ddpm":
             return self.p_sample_loop(
                 model,
                 shape=shape,
@@ -98,7 +86,7 @@ class GaussianDiffusionBeatGans:
                 model_kwargs=model_kwargs,
                 progress=progress,
             )
-        if self.conf.gen_type == "ddim":
+        if self.gen_type == "ddim":
             return self.ddim_sample_loop(
                 model,
                 shape=shape,
@@ -133,7 +121,7 @@ class GaussianDiffusionBeatGans:
 
         B, _C = x.shape[:2]
         assert t.shape == (B,)
-        with torch.amp.autocast("cuda", enabled=self.conf.fp16):
+        with torch.amp.autocast("cuda", enabled=self.fp16):
             model_forward = model.forward(x=x, t=self._scale_timesteps(t), **model_kwargs)
         model_output = model_forward.pred
 
@@ -489,13 +477,35 @@ class _WrappedModel:
 
 
 class SpacedDiffusionBeatGans(GaussianDiffusionBeatGans):
-    def __init__(self, conf: SpacedDiffusionBeatGansConfig):
-        self.conf = conf
-        self.use_timesteps = set(conf.use_timesteps)
+    def __init__(
+        self,
+        *,
+        gen_type: str,
+        betas,
+        model_type: str,
+        model_mean_type: str,
+        model_var_type: str,
+        loss_type: str,
+        rescale_timesteps: bool,
+        use_timesteps: Tuple[int],
+        fp16: bool,
+        train_pred_xstart_detach: bool = True,
+    ):
+        self.use_timesteps = set(use_timesteps)
         self.timestep_map = []
-        self.original_num_steps = len(conf.betas)
+        self.original_num_steps = len(betas)
 
-        base_diffusion = GaussianDiffusionBeatGans(conf)
+        base_diffusion = GaussianDiffusionBeatGans(
+            gen_type=gen_type,
+            betas=betas,
+            model_type=model_type,
+            model_mean_type=model_mean_type,
+            model_var_type=model_var_type,
+            loss_type=loss_type,
+            rescale_timesteps=rescale_timesteps,
+            fp16=fp16,
+            train_pred_xstart_detach=train_pred_xstart_detach,
+        )
         last_alpha_cumprod = 1.0
         new_betas = []
         for i, alpha_cumprod in enumerate(base_diffusion.alphas_cumprod):
@@ -503,8 +513,17 @@ class SpacedDiffusionBeatGans(GaussianDiffusionBeatGans):
                 new_betas.append(1 - alpha_cumprod / last_alpha_cumprod)
                 last_alpha_cumprod = alpha_cumprod
                 self.timestep_map.append(i)
-        conf.betas = np.array(new_betas)
-        super().__init__(conf)
+        super().__init__(
+            gen_type=gen_type,
+            betas=np.array(new_betas),
+            model_type=model_type,
+            model_mean_type=model_mean_type,
+            model_var_type=model_var_type,
+            loss_type=loss_type,
+            rescale_timesteps=rescale_timesteps,
+            fp16=fp16,
+            train_pred_xstart_detach=train_pred_xstart_detach,
+        )
 
     def p_mean_variance(self, model, *args, **kwargs):
         return super().p_mean_variance(self._wrap_model(model), *args, **kwargs)
@@ -520,7 +539,7 @@ class SpacedDiffusionBeatGans(GaussianDiffusionBeatGans):
 
 if __name__ == "__main__":
     # Example for ffhq256 dataset
-    cfg = SpacedDiffusionBeatGansConfig(
+    scheduler = SpacedDiffusionBeatGans(
         gen_type="ddim",
         betas=np.linspace(0.0001, 0.02, 1000, dtype=np.float64),
         model_type="autoencoder",
@@ -532,4 +551,3 @@ if __name__ == "__main__":
         train_pred_xstart_detach=True,
         use_timesteps=tuple(range(0, 1000, 50)),
     )
-    scheduler = SpacedDiffusionBeatGans(cfg)
