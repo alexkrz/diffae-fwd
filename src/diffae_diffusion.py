@@ -1,8 +1,9 @@
 import math
-from typing import Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
+import torch.nn as nn
 
 
 def betas_for_alpha_bar(num_diffusion_timesteps, alpha_bar, max_beta=0.999):
@@ -625,19 +626,107 @@ class SpacedDiffusionBeatGans(GaussianDiffusionBeatGans):
         return t
 
 
+class DiffAEScheduler:
+    """Standalone inference scheduler (diffusers-style model/scheduler split)."""
+
+    def __init__(
+        self,
+        *,
+        gen_type: str = "ddim",
+        beta_scheduler: str = "linear",
+        T: int = 1000,
+        T_eval: int = 20,
+        model_type: str = "autoencoder",
+        model_mean_type: str = "eps",
+        model_var_type: str = "fixed_large",
+        loss_type: str = "mse",
+        rescale_timesteps: bool = False,
+        fp16: bool = True,
+        train_pred_xstart_detach: bool = True,
+        num_inference_steps: Optional[int] = None,
+    ):
+        self.gen_type = gen_type
+        self.beta_scheduler = beta_scheduler
+        self.T = T
+        self.T_eval = T_eval
+        self.model_type = model_type
+        self.model_mean_type = model_mean_type
+        self.model_var_type = model_var_type
+        self.loss_type = loss_type
+        self.rescale_timesteps = rescale_timesteps
+        self.fp16 = fp16
+        self.train_pred_xstart_detach = train_pred_xstart_detach
+        self.num_inference_steps = num_inference_steps
+        self._eval_sampler = self._build_sampler(num_inference_steps)
+
+    def _build_sampler(self, num_inference_steps: Optional[int]) -> SpacedDiffusionBeatGans:
+        steps = self.T_eval if num_inference_steps is None else num_inference_steps
+        section_counts = [steps] if self.gen_type == "ddpm" else f"ddim{steps}"
+        return SpacedDiffusionBeatGans(
+            gen_type=self.gen_type,
+            betas=get_named_beta_schedule(self.beta_scheduler, self.T),
+            model_type=self.model_type,
+            model_mean_type=self.model_mean_type,
+            model_var_type=self.model_var_type,
+            loss_type=self.loss_type,
+            rescale_timesteps=self.rescale_timesteps,
+            use_timesteps=space_timesteps(num_timesteps=self.T, section_counts=section_counts),
+            fp16=self.fp16,
+            train_pred_xstart_detach=self.train_pred_xstart_detach,
+        )
+
+    def set_timesteps(self, num_inference_steps: int):
+        self.num_inference_steps = num_inference_steps
+        self._eval_sampler = self._build_sampler(num_inference_steps)
+
+    def _resolve_model(self, model: nn.Module) -> nn.Module:
+        # Allow passing either the wrapper Unet2DModel or the underlying network.
+        return model.unet if hasattr(model, "unet") else model
+
+    def get_sampler(self, T: Optional[int] = None) -> SpacedDiffusionBeatGans:
+        if T is None or T == self.num_inference_steps:
+            return self._eval_sampler
+        return self._build_sampler(T)
+
+    @torch.no_grad()
+    def reverse_sample_loop(
+        self,
+        model: nn.Module,
+        sample: torch.Tensor,
+        cond: Optional[torch.Tensor],
+        T: Optional[int],
+        progress: bool = False,
+    ):
+        sampler = self.get_sampler(T)
+        model_kwargs = {"cond": cond} if cond is not None else {}
+        out = sampler.ddim_reverse_sample_loop(
+            self._resolve_model(model), sample, model_kwargs=model_kwargs, progress=progress
+        )
+        return out["sample"]
+
+    @torch.no_grad()
+    def sample_loop(
+        self,
+        model: nn.Module,
+        noise: torch.Tensor,
+        cond: Optional[torch.Tensor],
+        T: Optional[int],
+        progress: bool = False,
+    ):
+        sampler = self.get_sampler(T)
+        model = self._resolve_model(model)
+        if cond is None:
+            return sampler.sample(model=model, noise=noise, progress=progress)
+        return sampler.sample(model=model, noise=noise, model_kwargs={"cond": cond}, progress=progress)
+
+
 if __name__ == "__main__":
     # Example for ffhq256 dataset
-    gen_type = "ddim"
-    beta_scheduler = "linear"
-    T = 1000
-    betas = get_named_beta_schedule(beta_scheduler, T)
-    T_eval = 20
-    section_counts = f"ddim{T_eval}" if gen_type == "ddim" else [T_eval]
-    use_timesteps = space_timesteps(num_timesteps=T, section_counts=section_counts)
-
-    scheduler = SpacedDiffusionBeatGans(
+    scheduler = DiffAEScheduler(
         gen_type="ddim",
-        betas=np.linspace(0.0001, 0.02, 1000, dtype=np.float64),
+        beta_scheduler="linear",
+        T=1000,
+        T_eval=20,
         model_type="autoencoder",
         model_mean_type="eps",
         model_var_type="fixed_large",
@@ -645,5 +734,4 @@ if __name__ == "__main__":
         rescale_timesteps=False,
         fp16=True,
         train_pred_xstart_detach=True,
-        use_timesteps=tuple(range(0, 1000, 50)),
     )
