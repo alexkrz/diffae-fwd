@@ -1,3 +1,4 @@
+# Extended version of gaussian_diffusion.py from https://github.com/openai/guided-diffusion
 import math
 from typing import Optional, Tuple
 

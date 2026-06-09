@@ -1,3 +1,5 @@
+# Extended version of unet.py from https://github.com/openai/guided-diffusion
+import copy
 import math
 from abc import abstractmethod
 from numbers import Number
@@ -971,6 +973,40 @@ class BeatGANsAutoencModel(BeatGANsUNetModel):
 
         pred = self.out(h)
         return AutoencReturn(pred=pred, cond=cond)
+
+
+class ClsModel(nn.Module):
+    """Inference-only classifier used by manipulate.py."""
+
+    def __init__(
+        self,
+        *,
+        style_ch: int = 512,
+        num_classes: int = 40,
+        manipulate_znormalize: bool = True,
+    ):
+        super().__init__()
+        self.style_ch = style_ch
+        self.num_classes = num_classes
+        self.manipulate_znormalize = manipulate_znormalize
+        self.classifier = nn.Linear(style_ch, num_classes)
+        self.ema_classifier = copy.deepcopy(self.classifier)
+        self.register_buffer("conds_mean", None)
+        self.register_buffer("conds_std", None)
+
+    def set_latent_stats(self, conds_mean: torch.Tensor, conds_std: torch.Tensor):
+        self.conds_mean = conds_mean.reshape(1, -1).float()
+        self.conds_std = conds_std.reshape(1, -1).float()
+
+    def normalize(self, cond):
+        if self.conds_mean is None or self.conds_std is None:
+            return cond
+        return (cond - self.conds_mean.to(cond.device)) / self.conds_std.to(cond.device)
+
+    def denormalize(self, cond):
+        if self.conds_mean is None or self.conds_std is None:
+            return cond
+        return (cond * self.conds_std.to(cond.device)) + self.conds_mean.to(cond.device)
 
 
 if __name__ == "__main__":
