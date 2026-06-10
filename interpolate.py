@@ -58,7 +58,7 @@ xT = scheduler.reverse_sample_loop(model, batch_device, cond=cond, T=250, progre
 
 # %%
 # Perform interpolation
-# Semantic codes are interpolated using convex combination, while stochastic codes are interpolated using spherical linear interpolation
+# NOTE: Semantic codes are interpolated using convex combination, while stochastic codes are interpolated using spherical linear interpolation
 alpha = torch.tensor(np.linspace(0, 1, 10, dtype=np.float32)).to(cond.device)
 intp = cond[0][None] * (1 - alpha[:, None]) + cond[1][None] * alpha[:, None]
 
