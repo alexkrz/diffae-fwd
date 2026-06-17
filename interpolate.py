@@ -13,6 +13,13 @@ from src.diffae_diffusion import DiffAEScheduler
 from src.diffae_unet import BeatGANsAutoencModel
 
 # %%
+# Download model checkpoints
+huggingface_hub.snapshot_download(
+    repo_id="alexkrz/diffae-ffhq256",
+    local_dir="checkpoints/diffae-ffhq256",
+)
+
+# %%
 # Load model
 device = "cuda"
 # conf = ffhq256_autoenc()
