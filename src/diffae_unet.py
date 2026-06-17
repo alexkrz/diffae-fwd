@@ -3,7 +3,7 @@ import copy
 import math
 from abc import abstractmethod
 from numbers import Number
-from typing import NamedTuple, Optional, Tuple
+from typing import NamedTuple, Optional
 
 import torch
 import torch.nn as nn
@@ -20,7 +20,6 @@ from .nn import (
 )
 
 
-# Definitions
 def torch_checkpoint(func, args, flag, preserve_rng_state=False):
     if flag:
         return torch.utils.checkpoint.checkpoint(func, *args, preserve_rng_state=preserve_rng_state)
