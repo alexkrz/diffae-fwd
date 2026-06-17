@@ -29,7 +29,7 @@ with open("configs/diffae-ffhq256/scheduler.json", "r", encoding="utf-8") as f:
     scheduler_cfg = json.load(f)
 model = BeatGANsAutoencModel(**autoenc_cfg)
 scheduler = DiffAEScheduler(**scheduler_cfg)
-state_dict = torch.load("checkpoints/diffae-ffhq256-pt/ffhq_autoenc_model.pt")
+state_dict = torch.load("checkpoints/diffae-ffhq256/ffhq_autoenc_model.pt")
 # Extract EMA weights from state_dict
 ema_state_dict = {k[len("ema_model.") :]: v for k, v in state_dict.items() if k.startswith("ema_model.")}
 model.load_state_dict(ema_state_dict, strict=True)
